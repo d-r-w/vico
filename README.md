@@ -3,7 +3,7 @@
 This is a preconfigured project template to quickly get a frontend off the ground.
 
 ## To Use
-The environment is used as expected:
+The environment is used as expected with [Bun.sh](https://bun.sh/docs/installation):
 
 bun install
 
