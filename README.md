@@ -1,4 +1,4 @@
-## [Bun.sh](https://bun.sh/) + [shadcn](https://ui.shadcn.com/) + [Next.JS](https://nextjs.org/)
+## [Bun.sh](https://bun.sh/) + [shadcn](https://ui.shadcn.com/) + [Next.JS](https://nextjs.org/) + [DuckDB](https://duckdb.org/)
 
 This is a preconfigured project template to quickly get a frontend off the ground.
 

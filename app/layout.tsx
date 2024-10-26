@@ -15,7 +15,7 @@ const geistMono = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "Bun.sh + shadcn + Next.js",
+  title: "Bun.sh + shadcn + Next.js + DuckDB",
   description: "Template app"
 };
 

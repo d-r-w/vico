@@ -53,6 +53,23 @@ export default function Footer() {
             priority
           />
         </a>
+        +
+        <a
+          className="flex items-center gap-2 hover:underline hover:underline-offset-4 h-5"
+          href="https://duckdb.org/"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <Image
+            className="dark:invert h-full w-auto"
+            src="https://duckdb.org/images/favicon/favicon-32x32.png"
+            alt="Next.js logo"
+            width={0}
+            height={0}
+            sizes="100%"
+            priority
+          />
+        </a>
       </div>
     </footer>
   );
