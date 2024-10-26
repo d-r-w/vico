@@ -1,21 +1,25 @@
-"use client";
-
-import { useState, useEffect } from "react";
 import type { Greeting } from "@/app/types";
 
-export default function Home() {
-  const [data, setData] = useState<Greeting[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+export default async function Home() {
+  async function getGreetings(): Promise<Greeting[]> {
+    const response = await fetch("http://localhost:3000/api/hello", {
+      cache: "no-store"
+    });
+    if (!response.ok) {
+      throw new Error("Failed to fetch data from the API.");
+    }
+    const result = await response.json();
+    return result.data;
+  }
 
-  useEffect(() => {
-    fetch("/api/hello")
-      .then((response) => response.json())
-      .then((result) => setData(result.data))
-      .catch((error) => {
-        console.error("Error fetching API:", error);
-        setError("Failed to fetch data from the API.");
-      });
-  }, []);
+  let error = null;
+  let data: Greeting[] = [];
+
+  try {
+    data = await getGreetings();
+  } catch (e: unknown) {
+    error = e instanceof Error ? e.message : `${e}`;
+  }
 
   return (
     <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
