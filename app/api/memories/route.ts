@@ -1,3 +1,4 @@
+import type { Memory } from "@/app/types";
 import { Database } from "duckdb-async";
 import { NextResponse } from "next/server";
 import fs from "node:fs/promises";
@@ -23,12 +24,6 @@ async function ensureMemoriesTableExists(db: Database): Promise<void> {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
   `);
-}
-
-interface Memory {
-  memory: string;
-  media?: string;
-  created_at: string;
 }
 
 export async function GET(request: Request) {

@@ -1,4 +1,6 @@
-export interface Greeting {
+export interface Memory {
   id: number;
-  message: string;
+  memory: string;
+  media?: string;
+  created_at: string;
 }
