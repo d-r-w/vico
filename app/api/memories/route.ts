@@ -39,13 +39,13 @@ export async function GET(request: Request) {
     if (searchTerm && searchTerm.trim() !== "") {
       console.debug(`Searching for \`${searchTerm}\``);
       rows = (await db.all(
-        "SELECT memory, media, created_at FROM memories WHERE memory ILIKE ? ORDER BY created_at DESC",
+        "SELECT created_at, memory, media, created_at FROM memories WHERE memory ILIKE ? ORDER BY created_at DESC",
         [`%${searchTerm}%`]
       )) as Memory[];
     } else {
       console.debug("Not searching.");
       rows = (await db.all(
-        "SELECT memory, created_at FROM memories ORDER BY created_at DESC LIMIT 5"
+        "SELECT created_at, memory, media, created_at FROM memories ORDER BY created_at DESC LIMIT 5"
       )) as Memory[];
     }
 

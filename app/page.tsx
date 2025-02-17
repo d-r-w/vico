@@ -1,39 +1,40 @@
-import type { Greeting } from "@/app/types";
+import type { Memory } from "@/app/types";
+import { MemoryCard } from "@/app/components/memory-card";
 
 export default async function Home() {
-  async function getGreetings(): Promise<Greeting[]> {
-    const response = await fetch("http://localhost:3000/api/hello", {
+  async function getMemories(): Promise<Memory[]> {
+    const response = await fetch("http://localhost:3000/api/memories", {
       cache: "no-store"
     });
     if (!response.ok) {
       throw new Error("Failed to fetch data from the API.");
     }
     const result = await response.json();
-    return result.data;
+    return result.memories;
   }
 
   let error = null;
-  let data: Greeting[] = [];
+  let data: Memory[] = [];
 
   try {
-    data = await getGreetings();
+    data = await getMemories();
   } catch (e: unknown) {
     error = e instanceof Error ? e.message : `${e}`;
   }
 
   return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="flex flex-col gap-8 row-start-2 items-center sm:items-start">
-        <h1 className="text-4xl font-bold">Application</h1>
+    <div className="min-h-screen p-8 pb-20 sm:p-20 font-[family-name:var(--font-geist-sans)]">
+      <main className="max-w-7xl mx-auto">
         {error ? (
           <p className="text-red-500">{error}</p>
-        ) : data ? (
-          <>
-            <p className="text-xl">Data from API:</p>
-            <code>{JSON.stringify(data, null, 2)}</code>
-          </>
+        ) : data.length > 0 ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            {data.map((memory) => (
+              <MemoryCard key={memory.id} memory={memory} />
+            ))}
+          </div>
         ) : (
-          <p>Loading...</p>
+          <p className="text-xl text-center">No memories found.</p>
         )}
       </main>
     </div>
