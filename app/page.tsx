@@ -23,7 +23,7 @@ export default async function Home() {
   }
 
   return (
-    <div className="min-h-screen p-8 pb-20 sm:p-20 font-[family-name:var(--font-geist-sans)]">
+    <div className="min-h-screen p-4 pb-10 sm:p-10 font-[family-name:var(--font-geist-sans)]">
       <main className="max-w-7xl mx-auto">
         {error ? (
           <p className="text-red-500">{error}</p>
