@@ -71,16 +71,14 @@ export async function POST(request: Request) {
     const memoryText: string = body.memory;
     const media: string | undefined = body.media;
 
-    console.debug(body);
-
     await ensureDataDirectoryExists();
     const db = await Database.create(DUCKDB_PERSISTENT_DATABASE_PATH);
     await ensureMemoriesTableExists(db);
 
     if (media && typeof media === "string") {
-      console.debug(media);
       try {
-        const extractUrl = "http://192.168.0.99:8000/extract_text_base64/";
+        const extractUrl =
+          "http://192.168.0.99:8000/extract_description_base64/";
         const response = await fetch(extractUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -93,23 +91,20 @@ export async function POST(request: Request) {
 
         const data = await response.json();
 
-        // TODO Modify ocr_service to provide text and a detailed explanation
-        const extractedMemoryText = `${data.extracted_text}\n\n${data.image_description}`;
+        const extractedMemoryText = `Screenshot: ${data.image_description}`;
 
-        console.debug(data);
-
-        await db.run("INSERT INTO memories (memory, media) VALUES (?, ?);", [
+        await db.run(
+          "INSERT INTO memories (memory, media) VALUES (?, ?)",
           extractedMemoryText,
           media
-        ]);
+        );
       } catch (error) {
         console.error("Error extracting text from media:", error);
 
-        // TODO If there's an error, simply store the media
-        await db.run("INSERT INTO memories (media) VALUES (?);", [media]);
+        await db.run("INSERT INTO memories (media) VALUES (?)", media);
       }
     } else {
-      await db.run("INSERT INTO memories (memory) VALUES (?);", [memoryText]);
+      await db.run("INSERT INTO memories (memory) VALUES (?)", memoryText);
     }
 
     await db.close();
