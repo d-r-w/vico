@@ -22,7 +22,10 @@ const dateTimeFormat = new Intl.DateTimeFormat("sv-SE", {
 
 export function MemoryCard({ memory }: { memory: Memory }) {
   return (
-    <Card className="w-full max-w-md h-[32rem] flex flex-col transition-all duration-300 hover:shadow-lg">
+    <Card
+      key={memory.id}
+      className="w-full max-w-md h-[32rem] flex flex-col transition-all duration-300 hover:shadow-lg"
+    >
       <CardHeader>
         <CardTitle className="text-lg font-semibold line-clamp-2">
           {memory.memory?.split("\n")[0]}
