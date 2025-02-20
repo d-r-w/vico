@@ -1,19 +1,19 @@
 from fastapi import FastAPI, Request
 from mlx_vlm import load as vlm_load, apply_chat_template, generate as vlm_generate
-from mlx_vlm.utils import load_config
 from mlx_lm import load as lm_load, generate as lm_generate
 from PIL import Image, ImageOps
 import io
 import base64
 from datetime import datetime
-import duckdb
+import memory_storage_service
+import threading
 
 class ModelInfo:
     def __init__(self, model, processor, config):
         self.model = model
         self.processor = processor
         self.config = config
-    
+        
     def __repr__(self):
         return f"ModelInfo(model={self.model}, processor={self.processor}, config={self.config})"
 
@@ -51,10 +51,10 @@ def get_current_date():
 def describe_image(image):
     model_info = model_manager.get_model("mlx-community/Qwen2.5-VL-72B-Instruct-4bit", is_vlm=True)
     messages = [
-      {"role": "system", "content": f"""
-      You are an expert at describing images in the fullest of detail, replacing vision for those who have lost it. Entire paragraphs explaining scenery, observations, annotations, and transcriptions are all desirable - longer descriptions are usually more helpful! The current date is {get_current_date()}.
-      """},
-      {"role": "user", "content": "Describe the image in the fullest of detail, per your instructions. In your final answer, include the summary of your observations."}
+        {"role": "system", "content": f"""
+        You are an expert at describing images in the fullest of detail, replacing vision for those who have lost it. Entire paragraphs explaining scenery, observations, annotations, and transcriptions are all desirable - longer descriptions are usually more helpful! The current date is {get_current_date()}.
+        """},
+        {"role": "user", "content": "Describe the image in the fullest of detail, per your instructions. In your final answer, include the summary of your observations."}
     ]
     
     prompt = apply_chat_template(model_info.processor, model_info.config, messages)
@@ -64,8 +64,8 @@ def infer_general(query):
     model_name = "mlx-community/DeepSeek-R1-Distill-Qwen-14B"
     model, tokenizer = model_manager.get_model(model_name, is_vlm=False)
     messages = [
-        {"role": "system", "content": f"You are a helpful assistant. The current date is {get_current_date()}."},
-        {"role": "user", "content": query}
+            {"role": "system", "content": f"You are a helpful assistant. The current date is {get_current_date()}."},
+            {"role": "user", "content": query}
     ]
     
     prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
@@ -75,84 +75,99 @@ def infer_with_context(context, query):
     model_name = "mlx-community/Qwen2.5-14B-Instruct-1M-bf16"
     model, tokenizer = model_manager.get_model(model_name, is_vlm=False)
     messages = [
-      {"role": "system", "content": f"""
-      <memories>
-        {context}
-      </memories>
-      
-      <role>
-        The current date is {get_current_date()}.
-        You are a master of searching through memories and understanding how they relate and overlap.
-        You have the ability to accurately catalog and reference memories.
-      </role>
-      
-      <instructions>
-        Always refer to <memories> when responding to user queries.
-        Always consider every memory in its entirety while responding - being as complete as possible is the goal.
-        Always end your response with an array of citations that refer to individual memories that relate to your response like this: `sources=[37, 73, 219]`.
-      </instructions>
-      """},
-      {"role": "user", "content": "What is the news from 2025-02-14?"},
-      {"role": "assistant", "content": f"""
-      2025-02-14 news includes several notable updates:
+        {"role": "system", "content": f"""
+        <memories>
+            {context}
+        </memories>
+        
+        <role>
+            The current date is {get_current_date()}.
+            You are a master of searching through memories and understanding how they relate and overlap.
+            You have the ability to accurately catalog and reference memories.
+        </role>
+        
+        <instructions>
+            Always refer to <memories> when responding to user queries.
+            Always consider every memory in its entirety while responding - being as complete as possible is the goal.
+            Always end your response with an array of citations that refer to individual memories that relate to your response like this: `sources=[37, 73, 219]`.
+        </instructions>
+        """},
+        {"role": "user", "content": "What is the news from 2025-02-14?"},
+        {"role": "assistant", "content": f"""
+        2025-02-14 news includes several notable updates:
 
-      1. **Elon Musk's DOGE Audit into SEC**: There's a significant announcement that DOGE, associated with Elon Musk, is conducting an audit into the Securities and Exchange Commission (SEC) for fraud, abuse, and waste. This news has garnered substantial attention, with 268,000 views and high levels of user engagement on social media platforms.
+        1. **Elon Musk's DOGE Audit into SEC**: There's a significant announcement that DOGE, associated with Elon Musk, is conducting an audit into the Securities and Exchange Commission (SEC) for fraud, abuse, and waste. This news has garnered substantial attention, with 268,000 views and high levels of user engagement on social media platforms.
 
-      2. **Elon Musk Proposes Live Video Tour of Fort Knox**: Elon Musk has proposed a live video tour of Fort Knox to verify the presence of 4,580 tons of gold. This breaking news has received considerable attention on Twitter, with 304 comments, 948 retweets, and 7,000 likes. The tweet has been viewed 78,000 times.
+        2. **Elon Musk Proposes Live Video Tour of Fort Knox**: Elon Musk has proposed a live video tour of Fort Knox to verify the presence of 4,580 tons of gold. This breaking news has received considerable attention on Twitter, with 304 comments, 948 retweets, and 7,000 likes. The tweet has been viewed 78,000 times.
 
-      These are the key news items from today, focusing on the actions and proposals related to Elon Musk and the financial sector.
-      
-      sources=[9, 13]
-      """},
-      {"role": "user", "content": "What is my latest achievement as of 2025-02-14?"},
-      {"role": "assistant", "content": f"""
-      Your latest achievement from 2025-02-14 is at 11:24 - the successful implementation and storage of your first memory fully manually, which you noted with excitement. This marks a significant step in the functionality and reliability of your second brain.
-      
-      sources=[10]
-      """},
-      {"role": "user", "content": "Search all memories relating to russia prior to 2025-02-14"},
-      {"role": "assistant", "content": f"""
-      Based on your request to search for memories related to `Russia` prior to 2025-02-14, here are all matching entries:
+        These are the key news items from today, focusing on the actions and proposals related to Elon Musk and the financial sector.
+        
+        sources=[9, 13]
+        """},
+        {"role": "user", "content": "What is my latest achievement as of 2025-02-14?"},
+        {"role": "assistant", "content": f"""
+        Your latest achievement from 2025-02-14 is at 11:24 - the successful implementation and storage of your first memory fully manually, which you noted with excitement. This marks a significant step in the functionality and reliability of your second brain.
+        
+        sources=[10]
+        """},
+        {"role": "user", "content": "Search all memories relating to russia prior to 2025-02-14"},
+        {"role": "assistant", "content": f"""
+        Based on your request to search for memories related to `Russia` prior to 2025-02-14, here are all matching entries:
 
-      1. A screenshot from a YouTube video titled \"Russia Is Hijacking US Military Military Satellites,\" posted by a user named \"saveitforparts.\" The video discusses the potential threat of Russian military satellites interfering with or taking control of U.S. military satellite communications. The video has gained significant attention, with 13,000 views in just five hours. The screenshot shows a black-and-white diagram illustrating a complex network of military communications and satellite systems, with a specific focus on the alleged interference by Russian satellites.
+        1. A screenshot from a YouTube video titled \"Russia Is Hijacking US Military Military Satellites,\" posted by a user named \"saveitforparts.\" The video discusses the potential threat of Russian military satellites interfering with or taking control of U.S. military satellite communications. The video has gained significant attention, with 13,000 views in just five hours. The screenshot shows a black-and-white diagram illustrating a complex network of military communications and satellite systems, with a specific focus on the alleged interference by Russian satellites.
 
-      2. A tweet from Emmanuel Macron, the President of France, posted on X (formerly Twitter). The tweet discusses recent diplomatic efforts and strategies regarding the conflict in Ukraine. It emphasizes the need for a strong and lasting peace, the importance of collaboration among European, American, and Ukrainian leaders, and the necessity for Europeans to invest in their security and defense. The tweet also highlights the urgency of implementing the European agenda for sovereignty and competitiveness, as defined at the Versailles Summit in 2022.
+        2. A tweet from Emmanuel Macron, the President of France, posted on X (formerly Twitter). The tweet discusses recent diplomatic efforts and strategies regarding the conflict in Ukraine. It emphasizes the need for a strong and lasting peace, the importance of collaboration among European, American, and Ukrainian leaders, and the necessity for Europeans to invest in their security and defense. The tweet also highlights the urgency of implementing the European agenda for sovereignty and competitiveness, as defined at the Versailles Summit in 2022.
 
-      3. Kalob Byers Wayne's Release: Russia has freed an American prisoner named Kalob Byers Wayne, who was arrested on drug charges on February 7th. His release occurred on the eve of talks between Russia and the U.S. concerning the war in Ukraine. This event is significant as it suggests a possible connection between the prisoner's release and the upcoming diplomatic discussions. This news highlights a diplomatic move by Russia just before planned talks with the U.S., potentially aimed at easing tensions or setting a positive tone for the discussions.
+        3. Kalob Byers Wayne's Release: Russia has freed an American prisoner named Kalob Byers Wayne, who was arrested on drug charges on February 7th. His release occurred on the eve of talks between Russia and the U.S. concerning the war in Ukraine. This event is significant as it suggests a possible connection between the prisoner's release and the upcoming diplomatic discussions. This news highlights a diplomatic move by Russia just before planned talks with the U.S., potentially aimed at easing tensions or setting a positive tone for the discussions.
 
-      These entries provide insights into both the geopolitical tensions involving Russia and the ongoing diplomatic efforts concerning Ukraine.
+        These entries provide insights into both the geopolitical tensions involving Russia and the ongoing diplomatic efforts concerning Ukraine.
 
-      sources=[18, 20, 23]
-      """},
-      {"role": "user", "content": query}
+        sources=[18, 20, 23]
+        """},
+        {"role": "user", "content": query}
     ]
     
     prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
     return lm_generate(model, tokenizer, prompt, verbose=True, max_tokens=100000)
 
-@app.post("/probe_memories/")
-async def probe_memories(request: Request):
-    data = await request.json()
-    query = data.get('query', '')
-    con = duckdb.connect("../data/database.db")
-    results = con.sql("SELECT id, created_at, memory FROM memories WHERE LENGTH(COALESCE(memory, '')) > 0 ORDER BY created_at")
-    data = results.fetchall()
-    
-    xml_memories = "\n\n".join([f"<memory id='{row[0]}' createdAt='{row[1].strftime('%Y-%m-%d %H:%M')}'>\n{row[2]}\n</memory>" for row in data])
-    con.close()
-    
-    return {"response": str(infer_with_context(xml_memories, query))}
-
-@app.post("/extract_description_base64/")
-async def extract_description_base64(request: Request):
-    data = await request.json()
-    base64_string = data.get('base64_image', '').split(',', 1)[1]
+def _process_image_memory(base64_string):
     decoded_bytes = base64.b64decode(base64_string)
     image = Image.open(io.BytesIO(decoded_bytes))
     image = ImageOps.exif_transpose(image).convert("RGB")
-    
-    return {"image_description": str(describe_image(image))}
+    image_description = describe_image(image)
+    memory_storage_service.save_memory(f"Image: {image_description}", decoded_bytes)
 
+@app.get("/api/recent_memories/")
+def recent_memories(limit: int = 5):
+    memories = memory_storage_service.get_recent_memories(limit)
+    return {"memories": memories}
+
+@app.post("/api/probe_memories/")
+async def probe_memories(request: Request):
+    data = await request.json()
+    query = data.get('query', '')
+    memories = memory_storage_service.get_all_memories()    
+    memories_xml = "\n\n".join([f"<memory id='{memory_row[0]}' createdAt='{memory_row[1].strftime('%Y-%m-%d %H:%M')}'>\n{memory_row[2]}\n</memory>" for memory_row in memories])
+    
+    return {"response": str(infer_with_context(memories_xml, query))}
+
+@app.post("/api/save_memory/")
+async def save_memory(request: Request):
+    
+    data = await request.json()
+    
+    base64_string = data.get('image')
+    print(base64_string)
+    if base64_string:
+        base64_string = base64_string.split(',', 1)[1] # Remove `data:png,` etc
+        threading.Thread(target=_process_image_memory, args=(base64_string,)).start()
+        return {"success": True}
+
+    memory = data.get('memory')
+    if memory:
+        memory_storage_service.save_memory(memory)
+        return {"success": True}
+    
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=3020)
