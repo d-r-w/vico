@@ -176,6 +176,11 @@ async def save_memory(request: Request):
         memory_storage_service.save_memory(memory)
         return {"success": True}
     
+@app.get("/api/delete_memory/")
+async def delete_memory(id):
+    memory_storage_service.delete_memory(id)
+    return {"success": True}
+    
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=3020)

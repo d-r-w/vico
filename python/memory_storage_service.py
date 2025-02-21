@@ -63,6 +63,12 @@ def save_memory(memory, media = None):
         INSERT INTO memories (memory, image) VALUES (?, ?);
     """, (memory, media))
     
+def delete_memory(memory_id):
+    print("deleting")
+    _execute_query("""
+        DELETE FROM memories WHERE id = ?;
+    """, (memory_id,))
+    
 def get_recent_memories(n):
     rows = _execute_query("""
         SELECT * FROM memories ORDER BY created_at DESC LIMIT ?;

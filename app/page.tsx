@@ -5,7 +5,7 @@ import SearchInput from "@/app/components/search-input";
 
 async function getMemories(search?: string): Promise<Memory[]> {
   const response = await fetch(
-    `http://localhost:3000/api/memories${search ? `?search=${encodeURIComponent(search)}` : ""}`,
+    `localhost:3000/api/memories${search ? `?search=${encodeURIComponent(search)}` : ""}`,
     { cache: "no-store" }
   );
   if (!response.ok) {
