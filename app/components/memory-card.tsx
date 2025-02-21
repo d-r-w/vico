@@ -7,6 +7,7 @@ import {
 } from "@/components/ui/card";
 import { CalendarIcon } from "lucide-react";
 import Image from "next/image";
+import { Skeleton } from "@/components/ui/skeleton";
 import type { Memory } from "@/app/types";
 
 const dateTimeFormat = new Intl.DateTimeFormat("sv-SE", {
@@ -32,14 +33,18 @@ export function MemoryCard({ memory }: { memory: Memory }) {
         </CardTitle>
       </CardHeader>
       <CardContent className="flex-grow overflow-hidden">
-        {memory.media && (
+        {memory.media ? (
           <div className="relative w-full h-40 mb-4">
             <Image
-              src={memory.media || "/placeholder.svg"}
+              src={`data:image/png;base64,${memory.media}`}
               alt="Memory media"
               fill
               className="object-cover rounded-md"
             />
+          </div>
+        ) : (
+          <div className="relative w-full h-40 mb-4">
+            <Skeleton className="w-full h-full rounded-md" />
           </div>
         )}
         <div className="h-[calc(100%-10rem)] overflow-y-auto pr-2">

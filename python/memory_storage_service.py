@@ -1,3 +1,4 @@
+import base64
 import duckdb
 from threading import Lock
 
@@ -20,11 +21,12 @@ class _MemoriesStorageService:
         cursor.execute("""
             CREATE SEQUENCE IF NOT EXISTS memories_id_seq START 1;
         """)
+        
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS memories (
                 id INTEGER DEFAULT nextval('memories_id_seq') PRIMARY KEY,
                 memory TEXT,
-                media BLOB,
+                image BLOB,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
@@ -33,6 +35,18 @@ class _MemoriesStorageService:
     
     def _get_connection(self):
         return self._connection
+
+def process_memory_rows(rows):
+    processed_rows = []
+    for memory_row in rows:
+        memory_id, memory, image, created_at = memory_row
+        
+        if image:
+            image = base64.b64encode(image).decode('utf-8')
+            
+        processed_rows.append((memory_id, memory, image, created_at))
+    
+    return processed_rows
 
 def _execute_query(query, params=(), fetch=False):
     storage = _MemoriesStorageService()
@@ -44,17 +58,26 @@ def _execute_query(query, params=(), fetch=False):
     cursor.close()
     return results
 
-def save_memory(memory, media):
+def save_memory(memory, media = None):
     _execute_query("""
         INSERT INTO memories (memory, media) VALUES (?, ?);
     """, (memory, media))
-
+    
 def get_recent_memories(n):
-    return _execute_query("""
+    rows = _execute_query("""
         SELECT * FROM memories ORDER BY created_at DESC LIMIT ?;
     """, (n,), fetch=True)
     
+    return process_memory_rows(rows)
+
+def search_memories(search):
+    rows = _execute_query("""
+        SELECT * FROM memories WHERE LOWER(memory) LIKE CONCAT('%', LOWER(?), '%') ORDER BY created_at DESC LIMIT 50;
+    """, (search,), fetch=True)
+
+    return process_memory_rows(rows)
+    
 def get_all_memories():
     return _execute_query("""
-        SELECT * FROM memories ORDER BY created_at;
+        SELECT id, created_at, memory FROM memories ORDER BY created_at;
     """, fetch=True)

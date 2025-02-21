@@ -1,114 +1,45 @@
 import type { Memory } from "@/app/types";
-import { Database } from "duckdb-async";
 import { NextResponse } from "next/server";
-import fs from "node:fs/promises";
-import path from "node:path";
 
-const DATA_DIR = path.join(process.cwd(), "data");
-const DUCKDB_PERSISTENT_DATABASE_PATH = path.join(DATA_DIR, "database.db");
+const INFERENCE_API_URL = "localhost:3020/api/";
 
-async function ensureDataDirectoryExists() {
-  try {
-    await fs.access(DATA_DIR);
-  } catch (error) {
-    console.debug(error);
-    await fs.mkdir(DATA_DIR, { recursive: true });
+async function fetchMemories(url: string): Promise<Memory[]> {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`);
   }
-}
 
-async function ensureMemoriesTableExists(db: Database): Promise<void> {
-  await db.run(`
-    CREATE TABLE IF NOT EXISTS memories (
-      memory TEXT,
-      media TEXT,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
+  const data: { memories: [number, string, string | null, string][] } =
+    await response.json();
+
+  return data.memories.map(([id, memory, media, created_at]) => ({
+    id,
+    memory,
+    media,
+    created_at
+  }));
 }
 
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
-    const searchTerm = searchParams.get("search");
+    const search = searchParams.get("search");
 
-    await ensureDataDirectoryExists();
-    const db = await Database.create(DUCKDB_PERSISTENT_DATABASE_PATH);
-    await ensureMemoriesTableExists(db);
-
-    let rows: Memory[];
-    if (searchTerm && searchTerm.trim() !== "") {
-      console.debug(`Searching for \`${searchTerm}\``);
-      rows = (await db.all(
-        "SELECT created_at, memory, media, created_at FROM memories WHERE memory ILIKE ? ORDER BY created_at DESC",
-        [`%${searchTerm}%`]
-      )) as Memory[];
-    } else {
-      console.debug("Not searching.");
-      rows = (await db.all(
-        "SELECT created_at, memory, media, created_at FROM memories ORDER BY created_at DESC LIMIT 5"
-      )) as Memory[];
+    if (search) {
+      const memories = await fetchMemories(
+        `${INFERENCE_API_URL}search_memories/?search=${encodeURIComponent(search)}`
+      );
+      return NextResponse.json({ memories });
     }
 
-    await db.close();
-    return NextResponse.json({ memories: rows });
+    const memories = await fetchMemories(
+      `${INFERENCE_API_URL}recent_memories/?limit=50`
+    );
+    return NextResponse.json({ memories });
   } catch (error) {
     console.error("Database error in GET:", error);
     return NextResponse.json(
       { error: "Failed to fetch memories." },
-      { status: 500 }
-    );
-  }
-}
-
-export async function POST(request: Request) {
-  try {
-    const body = await request.json();
-    const memoryText: string = body.memory;
-    const media: string | undefined = body.media;
-
-    await ensureDataDirectoryExists();
-    const db = await Database.create(DUCKDB_PERSISTENT_DATABASE_PATH);
-    await ensureMemoriesTableExists(db);
-
-    if (media && typeof media === "string") {
-      try {
-        const extractUrl =
-          "http://192.168.0.99:8000/extract_description_base64/";
-        const response = await fetch(extractUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ base64_image: media })
-        });
-
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        const data = await response.json();
-
-        const extractedMemoryText = `Screenshot: ${data.image_description}`;
-
-        await db.run(
-          "INSERT INTO memories (memory, media) VALUES (?, ?)",
-          extractedMemoryText,
-          media
-        );
-      } catch (error) {
-        console.error("Error extracting text from media:", error);
-
-        await db.run("INSERT INTO memories (media) VALUES (?)", media);
-      }
-    } else {
-      await db.run("INSERT INTO memories (memory) VALUES (?)", memoryText);
-    }
-
-    await db.close();
-
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error("Database error in POST:", error);
-    return NextResponse.json(
-      { error: "Failed to store memory." },
       { status: 500 }
     );
   }

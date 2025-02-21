@@ -9,6 +9,14 @@ const nextConfig = {
       {
         protocol: "https",
         hostname: "duckdb.org"
+      },
+      {
+        protocol: "https",
+        hostname: "nextjs.org"
+      },
+      {
+        protocol: "https",
+        hostname: "bun.sh"
       }
     ]
   },

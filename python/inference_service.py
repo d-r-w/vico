@@ -142,12 +142,20 @@ def recent_memories(limit: int = 5):
     memories = memory_storage_service.get_recent_memories(limit)
     return {"memories": memories}
 
+@app.get("/api/search_memories/")
+def recent_memories(search):
+    memories = memory_storage_service.search_memories(search)
+    return {"memories": memories}
+
 @app.post("/api/probe_memories/")
 async def probe_memories(request: Request):
     data = await request.json()
     query = data.get('query', '')
     memories = memory_storage_service.get_all_memories()    
-    memories_xml = "\n\n".join([f"<memory id='{memory_row[0]}' createdAt='{memory_row[1].strftime('%Y-%m-%d %H:%M')}'>\n{memory_row[2]}\n</memory>" for memory_row in memories])
+
+    indent_sequence = "\n\t"
+    newline_char = "\n"
+    memories_xml = "\n\n\n".join([f"<memory id='{memory_row[0]}' createdAt='{memory_row[1].strftime('%Y-%m-%d %H:%M')}'>\n\t{memory_row[2].replace(newline_char, indent_sequence)}\n</memory>" for memory_row in memories])
     
     return {"response": str(infer_with_context(memories_xml, query))}
 

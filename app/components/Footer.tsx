@@ -20,7 +20,7 @@ const badges: Badge[] = [
   },
   {
     websiteUrl: "https://nextjs.org/",
-    iconSrc: "https://nextjs.org/icons/next.svg",
+    iconSrc: "https://nextjs.org/favicon.ico",
     altText: "Next.js logo"
   },
   {
