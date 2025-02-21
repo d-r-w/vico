@@ -12,10 +12,10 @@ async function fetchMemories(url: string): Promise<Memory[]> {
   const data: { memories: [number, string, string | null, string][] } =
     await response.json();
 
-  return data.memories.map(([id, memory, media, created_at]) => ({
+  return data.memories.map(([id, memory, image, created_at]) => ({
     id,
     memory,
-    media,
+    image,
     created_at
   }));
 }

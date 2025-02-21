@@ -60,7 +60,7 @@ def _execute_query(query, params=(), fetch=False):
 
 def save_memory(memory, media = None):
     _execute_query("""
-        INSERT INTO memories (memory, media) VALUES (?, ?);
+        INSERT INTO memories (memory, image) VALUES (?, ?);
     """, (memory, media))
     
 def get_recent_memories(n):
