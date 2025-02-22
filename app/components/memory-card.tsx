@@ -114,7 +114,7 @@ export function MemoryCard({ memory }: { memory: Memory }) {
       setIsConfirmingDelete(true);
       timerRef.current = setTimeout(() => {
         setIsConfirmingDelete(false);
-      }, 2000);
+      }, 1500);
     }
   };
 
@@ -181,14 +181,17 @@ export function MemoryCard({ memory }: { memory: Memory }) {
           <button
             type="button"
             onClick={handleTrashClick}
-            className={`p-2 hover:text-white ${
+            className={`p-2 transition-all duration-200 ${
               isConfirmingDelete
-                ? "rounded-full text-white bg-orange-500"
-                : "hover:rounded-full hover:bg-red-700"
-            } text-red-500 ${hasDeleteError ? "animate-shake" : ""} transition-all duration-200`}
-            aria-label="Delete memory"
+                ? "rounded-full bg-red-500 hover:bg-red-500 animate-confirm-delete"
+                : "text-red-500 hover:text-white hover:bg-red-700 hover:rounded-full"
+            } ${hasDeleteError ? "animate-shake" : ""}`}
+            aria-label={isConfirmingDelete ? "Click again to confirm delete" : "Delete memory"}
           >
-            <Trash size={20} />
+            <Trash 
+              size={20} 
+              className={`${isConfirmingDelete ? " text-white animate-bounce-subtle" : ""}`}
+            />
           </button>
         </div>
       </CardFooter>
