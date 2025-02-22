@@ -87,3 +87,8 @@ def get_all_memories():
     return _execute_query("""
         SELECT id, created_at, memory FROM memories ORDER BY created_at;
     """, fetch=True)
+
+def edit_memory(memory_id, new_memory_text):
+    _execute_query("""
+        UPDATE memories SET memory = ? WHERE id = ?;
+    """, (new_memory_text, memory_id))

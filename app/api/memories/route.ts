@@ -70,3 +70,34 @@ export async function DELETE(request: Request) {
     );
   }
 }
+
+export async function PATCH(request: Request) {
+  try {
+    const body = await request.json();
+    const { id, memory } = body;
+
+    if (!id || !memory) {
+      throw new Error("Both `id` and `memory` are required");
+    }
+
+    const response = await fetch(`${INFERENCE_API_URL}edit_memory/`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ id, memory }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error("Failed to edit memory", error);
+    return NextResponse.json(
+      { success: false, error: "Failed to edit memory" },
+      { status: 500 }
+    );
+  }
+}

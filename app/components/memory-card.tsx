@@ -8,9 +8,11 @@ import {
   CardHeader,
   CardTitle
 } from "@/components/ui/card";
-import { CalendarIcon, Trash } from "lucide-react";
+import { CalendarIcon, Trash, Save } from "lucide-react";
 import Image from "next/image";
 import type { Memory } from "@/app/types";
+import { Textarea } from "../../components/ui/textarea";
+import React from "react";
 
 const dateTimeFormat = new Intl.DateTimeFormat("sv-SE", {
   year: "numeric",
@@ -23,11 +25,29 @@ const dateTimeFormat = new Intl.DateTimeFormat("sv-SE", {
   timeZone: "UTC"
 });
 
+const MemoryTextarea = React.memo(({ value, onChange }: {
+  value: string;
+  onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
+}) => (
+  <Textarea
+    value={value}
+    onChange={onChange}
+    className="w-full h-full resize-none bg-transparent hover:bg-accent/10 focus:bg-background transition-colors duration-200 overflow-y-auto"
+    placeholder="Write your memory..."
+  />
+));
+
+MemoryTextarea.displayName = "MemoryTextarea";
+
 export function MemoryCard({ memory }: { memory: Memory }) {
   const [isDeleted, setIsDeleted] = useState(false);
   const [hasDeleteError, setHasDeleteError] = useState(false);
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
+  const [editedMemory, setEditedMemory] = useState(memory.memory);
+  const [isSaving, setIsSaving] = useState(false);
+  const [hasSaveError, setHasSaveError] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hasChanges = editedMemory !== memory.memory;
 
   useEffect(() => {
     return () => {
@@ -36,6 +56,38 @@ export function MemoryCard({ memory }: { memory: Memory }) {
       }
     };
   }, []);
+
+  const handleSave = async () => {
+    if (!hasChanges) {
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const res = await fetch('/api/memories', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          id: memory.id,
+          memory: editedMemory,
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error('Failed to save');
+      }
+
+      memory.memory = editedMemory;
+    } catch (err) {
+      console.error('Failed to save memory:', err);
+      setHasSaveError(true);
+      setTimeout(() => setHasSaveError(false), 1000);
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   const handleDelete = async () => {
     setIsConfirmingDelete(false);
@@ -71,49 +123,74 @@ export function MemoryCard({ memory }: { memory: Memory }) {
   return (
     <Card
       key={memory.id}
-      className="w-full max-w-md h-[32rem] flex flex-col transition-all duration-300 hover:shadow-lg"
+      className="w-full max-w-md h-[32rem] flex flex-col"
     >
-      <CardHeader className="flex justify-between items-center">
+      <CardHeader className="flex justify-between items-center flex-none">
         <CardTitle className="text-lg font-semibold line-clamp-2">
-          {memory.memory?.split("\n")[0]}
+          {editedMemory?.split("\n")[0]}
         </CardTitle>
       </CardHeader>
-      <CardContent className="flex flex-col flex-grow overflow-hidden">
-        {memory.image && (
-          <div className="relative w-full h-[48rem] mb-4">
-            <Image
-              src={`data:image/png;base64,${memory.image}`}
-              alt="Memory image"
-              fill
-              className="object-cover rounded-md"
+      <CardContent className="flex-1 flex flex-col min-h-0">
+        {memory.image ? (
+          <div style={{ display: "flex", flexDirection: "column" }} className="grid grid-rows-[1fr,auto] h-full gap-4">
+            <div style={{ display: "flex" }} className="min-h-[10rem] relative w-full min-h-0">
+              <Image
+                src={`data:image/png;base64,${memory.image}`}
+                alt="Memory image"
+                fill
+                className="object-cover rounded-md"
+              />
+            </div>
+            <MemoryTextarea 
+              value={editedMemory}
+              onChange={(e) => setEditedMemory(e.target.value)}
             />
           </div>
+        ) : (
+          <MemoryTextarea 
+            value={editedMemory}
+            onChange={(e) => setEditedMemory(e.target.value)}
+          />
         )}
-        <div className="flex-grow overflow-y-auto pr-2">
-          <p className="text-sm text-muted-foreground whitespace-pre-wrap">
-            {memory.memory}
-          </p>
-        </div>
       </CardContent>
-      <CardFooter className="mt-auto">
+      <CardFooter className="flex-none">
         <div className="flex items-center text-sm text-muted-foreground">
           <CalendarIcon className="w-4 h-4 mr-2" />
           <time dateTime={memory.created_at}>
             {dateTimeFormat.format(new Date(memory.created_at))}
           </time>
         </div>
-        <button
-          type="button"
-          onClick={handleTrashClick}
-          className={`ml-auto p-2 hover:text-white ${
-            isConfirmingDelete
-              ? "rounded-full text-white bg-orange-500"
-              : "hover:rounded-full hover:bg-red-700"
-          } text-red-500 ${hasDeleteError ? "animate-shake" : ""}`}
-          aria-label="Delete memory"
-        >
-          <Trash size={20} />
-        </button>
+        <div className="ml-auto flex gap-2">
+          {hasChanges && (
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={isSaving}
+              className={`p-2 ${
+                isSaving
+                  ? "text-gray-400"
+                  : hasSaveError
+                  ? "animate-shake text-red-500"
+                  : "text-green-500 hover:text-white hover:bg-green-700 hover:rounded-full"
+              } transition-all duration-200`}
+              aria-label="Save memory"
+            >
+              <Save size={20} />
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={handleTrashClick}
+            className={`p-2 hover:text-white ${
+              isConfirmingDelete
+                ? "rounded-full text-white bg-orange-500"
+                : "hover:rounded-full hover:bg-red-700"
+            } text-red-500 ${hasDeleteError ? "animate-shake" : ""} transition-all duration-200`}
+            aria-label="Delete memory"
+          >
+            <Trash size={20} />
+          </button>
+        </div>
       </CardFooter>
     </Card>
   );

@@ -180,6 +180,18 @@ async def save_memory(request: Request):
 async def delete_memory(id):
     memory_storage_service.delete_memory(id)
     return {"success": True}
+
+@app.patch("/api/edit_memory/")
+async def edit_memory(request: Request):
+    data = await request.json()
+    memory_id = data.get('id')
+    new_memory_text = data.get('memory')
+    
+    if not memory_id or not new_memory_text:
+        return {"success": False, "error": "Both id and memory are required"}, 400
+        
+    memory_storage_service.edit_memory(memory_id, new_memory_text)
+    return {"success": True}
     
 if __name__ == "__main__":
     import uvicorn
