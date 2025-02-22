@@ -132,13 +132,13 @@ export function MemoryCard({ memory }: { memory: Memory }) {
       </CardHeader>
       <CardContent className="flex-1 flex flex-col min-h-0">
         {memory.image ? (
-          <div style={{ display: "flex", flexDirection: "column" }} className="grid grid-rows-[1fr,auto] h-full gap-4">
-            <div style={{ display: "flex" }} className="min-h-[10rem] relative w-full min-h-0">
+          <div className="flex flex-col h-full gap-4">
+            <div className="flex-1 relative w-full min-h-[10rem] border border-gray-200 rounded-md">
               <Image
                 src={`data:image/png;base64,${memory.image}`}
                 alt="Memory image"
                 fill
-                className="object-cover rounded-md"
+                className="object-contain rounded-md"
               />
             </div>
             <MemoryTextarea 
