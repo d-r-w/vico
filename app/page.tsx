@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import type { Memory } from "@/app/types";
 import { MemoryCard } from "@/app/components/memory-card";
 import SearchInput from "@/app/components/search-input";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 async function getMemories(search?: string): Promise<Memory[]> {
   const response = await fetch(
@@ -23,7 +24,12 @@ export default async function Home({
     <div className="min-h-screen bg-background font-sans">
       <header className="bg-primary text-primary-foreground py-6">
         <div className="container mx-auto px-4">
-          <SearchInput initialSearch={search} />
+          <div className="flex items-center gap-4">
+            <div className="flex-grow">
+              <SearchInput initialSearch={search} />
+            </div>
+            <ThemeToggle />
+          </div>
         </div>
       </header>
       <main className="container mx-auto px-4 py-8">
