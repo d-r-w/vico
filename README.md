@@ -77,3 +77,11 @@ python python/inference_service.py
 ## Acknowledgments
 
 Built using [shadcn/ui](https://ui.shadcn.com/) and ML implementations from [mlx-vlm](https://github.com/Blaizzy/mlx-vlm) ❤️.
+
+## Memory Backup
+```bash
+# Backup memories.duckdb twice daily (9am/9pm)
+# Creates max 62 rotating backups (31 days × 2 backups/day)
+# Format: memories-YEAR_DAY_HOUR.duckdb (e.g., memories-2024_15_09.duckdb)
+0 9,21 * * * rsync -avz /path/to/vico/data/memories.duckdb backupserver:/path/to/backup/memories-$(date +\%Y_\%d_\%H).duckdb
+```
