@@ -48,13 +48,15 @@ model_manager = ModelManager()
 def get_current_date():
     return datetime.today().strftime('%Y-%m-%d')
 
-def describe_image(image):
+def describe_image(image, memory_text = None):
     model_info = model_manager.get_model("mlx-community/Qwen2.5-VL-72B-Instruct-4bit", is_vlm=True)
+    
+    base_prompt = "Describe the image in the fullest of detail, per your instructions. In your final answer, include the summary of your observations."
+    context_block = f"\n\n<image_context>\n\t{memory_text}\n</image_context>\n\n" if memory_text else ""
+    
     messages = [
-        {"role": "system", "content": f"""
-        You are an expert at describing images in the fullest of detail, replacing vision for those who have lost it. Entire paragraphs explaining scenery, observations, annotations, and transcriptions are all desirable - longer descriptions are usually more helpful! The current date is {get_current_date()}.
-        """},
-        {"role": "user", "content": "Describe the image in the fullest of detail, per your instructions. In your final answer, include the summary of your observations."}
+        {"role": "system", "content": f"You are an expert at describing images in the fullest of detail, replacing vision for those who have lost it. Entire paragraphs explaining scenery, observations, annotations, and transcriptions are all desirable - longer descriptions are usually more helpful! The current date is {get_current_date()}."},
+        {"role": "user", "content": f"{base_prompt}{context_block}"}
     ]
     
     prompt = apply_chat_template(model_info.processor, model_info.config, messages)
@@ -130,12 +132,16 @@ def infer_with_context(context, query):
     prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
     return lm_generate(model, tokenizer, prompt, verbose=True, max_tokens=100000)
 
-def _process_image_memory(base64_string):
+def _process_image_memory(base64_string, memory_text = None):
     decoded_bytes = base64.b64decode(base64_string)
     image = Image.open(io.BytesIO(decoded_bytes))
     image = ImageOps.exif_transpose(image).convert("RGB")
-    image_description = describe_image(image)
-    memory_storage_service.save_memory(f"Image: {image_description}", decoded_bytes)
+    image_description = describe_image(image, memory_text)
+    final_memory = (
+        f"{memory_text}\n\nImage: {image_description}" if memory_text 
+        else f"Image: {image_description}"
+    )
+    memory_storage_service.save_memory(final_memory, decoded_bytes)
 
 @app.get("/api/recent_memories/")
 def recent_memories(limit: int = 5):
@@ -162,18 +168,18 @@ async def probe_memories(request: Request):
 @app.post("/api/save_memory/")
 async def save_memory(request: Request):
     
-    data = await request.json()
+    memory_data = await request.json()
     
-    base64_string = data.get('image')
-    print(base64_string)
-    if base64_string:
-        base64_string = base64_string.split(',', 1)[1] # Remove `data:png,` etc
-        threading.Thread(target=_process_image_memory, args=(base64_string,)).start()
+    memory_text = memory_data.get('text')
+    memory_image_base64_string = memory_data.get('image')
+    
+    if memory_image_base64_string:
+        memory_image_base64_string = memory_image_base64_string.split(',', 1)[1] # Remove `data:png,` etc
+        threading.Thread(target=_process_image_memory, args=(memory_image_base64_string,memory_text)).start()
         return {"success": True}
 
-    memory = data.get('memory')
-    if memory:
-        memory_storage_service.save_memory(memory)
+    if memory_text:
+        memory_storage_service.save_memory(memory_text)
         return {"success": True}
     
 @app.get("/api/delete_memory/")
