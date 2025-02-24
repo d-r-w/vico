@@ -2,15 +2,15 @@ import { Suspense } from "react";
 import type { Memory } from "@/app/types";
 import { MemoryCard } from "@/app/components/memory-card";
 import { ClientWrapper } from "@/app/components/client-wrapper";
+import Footer from "@/app/components/footer";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import Footer from "./components/footer";
 
 export default async function Home({
   searchParams
 }: {
   searchParams: { search?: string };
 }) {
-  const search = searchParams.search || "";
+  const search = searchParams.search ?? "";
 
   return (
     <div className="h-screen flex flex-col bg-background font-sans">
