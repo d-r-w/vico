@@ -157,7 +157,7 @@ def recent_memories(search):
 async def probe_memories(request: Request):
     data = await request.json()
     query = data.get('query', '')
-    memories = memory_storage_service.get_all_memories()    
+    memories = memory_storage_service.get_all_memories()
 
     indent_sequence = "\n\t"
     newline_char = "\n"
