@@ -1,16 +1,18 @@
 "use client";
 
 import { useState } from "react";
-import SearchInput from "@/app/components/search-input";
-import { SearchOrChatToggle } from "@/app/components/search-or-chat-toggle";
+import SearchInput from "./search-input";
+import { ResponseDisplay } from "@/components/response-display";
+import { MODES, Mode } from "@/app/types";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { Mode, MODES } from "@/app/types";
+import { SearchOrChatToggle } from "./search-or-chat-toggle";
 
 interface ClientWrapperProps {
   initialSearch: string;
 }
 
 export function ClientWrapper({ initialSearch }: ClientWrapperProps) {
+  const [response, setResponse] = useState<string>("");
   const [mode, setMode] = useState<Mode>(MODES.SEARCH);
 
   return (
@@ -19,10 +21,15 @@ export function ClientWrapper({ initialSearch }: ClientWrapperProps) {
         <div className="flex items-center gap-4">
           <SearchOrChatToggle mode={mode} onModeChange={setMode} />
           <div className="flex-grow">
-            <SearchInput initialSearch={initialSearch} mode={mode} />
-          </div>
+              <SearchInput 
+                initialSearch={initialSearch} 
+                mode={mode} 
+                onResponseReceived={setResponse}
+              />
+            </div>
           <ThemeToggle />
         </div>
+        {response && <ResponseDisplay content={response} />}
       </div>
     </header>
   );

@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
 import "./globals.css";
-import Footer from "./components/footer";
 import { ThemeProvider } from "@/components/theme-provider";
 
 const geistSans = localFont({
@@ -35,7 +34,6 @@ export default function RootLayout({
           disableTransitionOnChange
         >
           {children}
-          <Footer />
         </ThemeProvider>
       </body>
     </html>

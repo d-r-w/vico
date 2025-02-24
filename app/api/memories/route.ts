@@ -1,7 +1,7 @@
 import type { Memory } from "@/app/types";
 import { NextResponse } from "next/server";
 
-const INFERENCE_API_URL = "localhost:3020/api/";
+import { INFERENCE_API_URL } from "../config";
 
 async function fetchMemories(url: string): Promise<Memory[]> {
   const response = await fetch(url);

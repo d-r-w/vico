@@ -2,6 +2,8 @@ import { Suspense } from "react";
 import type { Memory } from "@/app/types";
 import { MemoryCard } from "@/app/components/memory-card";
 import { ClientWrapper } from "@/app/components/client-wrapper";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import Footer from "./components/footer";
 
 export default async function Home({
   searchParams
@@ -11,13 +13,18 @@ export default async function Home({
   const search = searchParams.search || "";
 
   return (
-    <div className="min-h-screen bg-background font-sans">
-      <ClientWrapper initialSearch={search} />
-      <main className="container mx-auto px-4 py-8">
-        <Suspense fallback={<p className="text-xl text-center">Loading memories...</p>}>
-          <MemoryList search={search} />
-        </Suspense>
-      </main>
+    <div className="h-screen flex flex-col bg-background font-sans">
+      <ScrollArea className="flex-1">
+        <div className="min-h-full">
+          <ClientWrapper initialSearch={search} />
+          <main className="container mx-auto px-4 py-8">
+            <Suspense fallback={<p className="text-xl text-center">Loading memories...</p>}>
+              <MemoryList search={search} />
+            </Suspense>
+          </main>
+        </div>
+        <Footer />
+      </ScrollArea>
     </div>
   );
 }

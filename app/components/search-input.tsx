@@ -8,9 +8,10 @@ import { Mode, MODES } from "@/app/types";
 interface SearchInputProps {
   initialSearch?: string;
   mode: Mode;
+  onResponseReceived?: (response: string) => void;
 }
 
-export default function SearchInput({ initialSearch = "", mode }: SearchInputProps) {
+export default function SearchInput({ initialSearch = "", mode, onResponseReceived }: SearchInputProps) {
   const [search, setSearch] = useState(initialSearch);
   const router = useRouter();
 
@@ -22,9 +23,23 @@ export default function SearchInput({ initialSearch = "", mode }: SearchInputPro
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleKeyDown = async (e: React.KeyboardEvent<HTMLInputElement>) => {
+    const value = e.currentTarget.value;
     if (mode === MODES.CHAT && e.key === 'Enter') {
-      console.log("Chat input:", e.currentTarget.value);
+      try {
+        const response = await fetch('/api/memories/probe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: value }),
+        });
+        
+        if (!response.ok) throw new Error('Failed to probe memories');
+        
+        const result = await response.json();
+        onResponseReceived?.(result.response);
+      } catch (error) {
+        console.error('Failed to probe memories:', error);
+      }
     }
   };
 

@@ -25,28 +25,41 @@ const dateTimeFormat = new Intl.DateTimeFormat("sv-SE", {
   timeZone: "UTC"
 });
 
-const MemoryTextarea = React.memo(({ value, onChange }: {
+interface MemoryTextareaProps {
   value: string;
   onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
-}) => (
-  <Textarea
-    value={value}
-    onChange={onChange}
-    className="w-full h-full resize-none bg-transparent hover:bg-accent/10 focus:bg-background transition-colors duration-200 overflow-y-auto"
-    placeholder="Write your memory..."
-  />
-));
+}
 
-MemoryTextarea.displayName = "MemoryTextarea";
+function MemoryTextarea({ value, onChange }: MemoryTextareaProps) {
+  return (
+    <Textarea
+      value={value}
+      onChange={onChange}
+      className="w-full h-full resize-none bg-transparent hover:bg-accent/10 focus:bg-background transition-colors duration-200 overflow-y-auto"
+      placeholder="Write your memory..."
+    />
+  );
+}
 
-export function MemoryCard({ memory }: { memory: Memory }) {
-  const [isDeleted, setIsDeleted] = useState(false);
-  const [hasDeleteError, setHasDeleteError] = useState(false);
-  const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
+type Timer = ReturnType<typeof setTimeout>;
+
+interface MemoryCardProps {
+  memory: Memory;
+}
+
+export function MemoryCard({ memory }: MemoryCardProps) {
+  const [deleteState, setDeleteState] = useState({
+    isDeleted: false,
+    hasError: false,
+    isConfirming: false
+  });
+  const [saveState, setSaveState] = useState({
+    isSaving: false,
+    hasError: false
+  });
   const [editedMemory, setEditedMemory] = useState(memory.memory);
-  const [isSaving, setIsSaving] = useState(false);
-  const [hasSaveError, setHasSaveError] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  
+  const timerRef = useRef<Timer>();
   const hasChanges = editedMemory !== memory.memory;
 
   useEffect(() => {
@@ -58,67 +71,57 @@ export function MemoryCard({ memory }: { memory: Memory }) {
   }, []);
 
   const handleSave = async () => {
-    if (!hasChanges) {
-      return;
-    }
+    if (!hasChanges) return;
 
-    setIsSaving(true);
+    setSaveState(prev => ({ ...prev, isSaving: true }));
     try {
       const res = await fetch('/api/memories', {
         method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          id: memory.id,
-          memory: editedMemory,
-        }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: memory.id, memory: editedMemory }),
       });
 
-      if (!res.ok) {
-        throw new Error('Failed to save');
-      }
-
+      if (!res.ok) throw new Error('Failed to save');
       memory.memory = editedMemory;
     } catch (err) {
       console.error('Failed to save memory:', err);
-      setHasSaveError(true);
-      setTimeout(() => setHasSaveError(false), 1000);
+      setSaveState(prev => ({ ...prev, hasError: true }));
+      setTimeout(() => setSaveState(prev => ({ ...prev, hasError: false })), 1000);
     } finally {
-      setIsSaving(false);
+      setSaveState(prev => ({ ...prev, isSaving: false }));
     }
   };
 
   const handleDelete = async () => {
-    setIsConfirmingDelete(false);
+    setDeleteState(prev => ({ ...prev, isConfirming: false }));
 
     const res = await fetch(`/api/memories?id=${memory.id}`, {
       method: "DELETE"
     });
     if (res.ok) {
-      setIsDeleted(true);
+      setDeleteState(prev => ({ ...prev, isDeleted: true }));
     } else {
-      setHasDeleteError(true);
-      setTimeout(() => setHasDeleteError(false), 1000);
+      setDeleteState(prev => ({ ...prev, hasError: true }));
+      setTimeout(() => setDeleteState(prev => ({ ...prev, hasError: false })), 1000);
     }
   };
 
   const handleTrashClick = () => {
-    if (isConfirmingDelete) {
+    if (deleteState.isConfirming) {
       if (timerRef.current) {
         clearTimeout(timerRef.current);
-        timerRef.current = null;
+        timerRef.current = undefined;
       }
       handleDelete();
     } else {
-      setIsConfirmingDelete(true);
+      setDeleteState(prev => ({ ...prev, isConfirming: true }));
       timerRef.current = setTimeout(() => {
-        setIsConfirmingDelete(false);
+        setDeleteState(prev => ({ ...prev, isConfirming: false }));
       }, 1500);
     }
   };
 
-  if (isDeleted) return null;
+  if (deleteState.isDeleted) return null;
 
   return (
     <Card
@@ -131,8 +134,8 @@ export function MemoryCard({ memory }: { memory: Memory }) {
         </CardTitle>
       </CardHeader>
       <CardContent className="flex-1 flex flex-col min-h-0">
-        {memory.image ? (
-          <div className="flex flex-col h-full gap-4">
+        <div className="flex flex-col h-full gap-4">
+          {memory.image && (
             <div className="flex-1 relative w-full min-h-[10rem] border border-gray-200 rounded-md">
               <Image
                 src={`data:image/png;base64,${memory.image}`}
@@ -141,17 +144,12 @@ export function MemoryCard({ memory }: { memory: Memory }) {
                 className="object-contain rounded-md"
               />
             </div>
-            <MemoryTextarea 
-              value={editedMemory}
-              onChange={(e) => setEditedMemory(e.target.value)}
-            />
-          </div>
-        ) : (
+          )}
           <MemoryTextarea 
             value={editedMemory}
             onChange={(e) => setEditedMemory(e.target.value)}
           />
-        )}
+        </div>
       </CardContent>
       <CardFooter className="flex-none">
         <div className="flex items-center text-sm text-muted-foreground">
@@ -165,11 +163,11 @@ export function MemoryCard({ memory }: { memory: Memory }) {
             <button
               type="button"
               onClick={handleSave}
-              disabled={isSaving}
+              disabled={saveState.isSaving}
               className={`p-2 ${
-                isSaving
+                saveState.isSaving
                   ? "text-gray-400"
-                  : hasSaveError
+                  : saveState.hasError
                   ? "animate-shake text-red-500"
                   : "text-green-500 hover:text-white hover:bg-green-700 hover:rounded-full"
               } transition-all duration-200`}
@@ -182,15 +180,15 @@ export function MemoryCard({ memory }: { memory: Memory }) {
             type="button"
             onClick={handleTrashClick}
             className={`p-2 transition-all duration-200 ${
-              isConfirmingDelete
+              deleteState.isConfirming
                 ? "rounded-full bg-red-500 hover:bg-red-500 animate-confirm-delete"
                 : "text-red-500 hover:text-white hover:bg-red-700 hover:rounded-full"
-            } ${hasDeleteError ? "animate-shake" : ""}`}
-            aria-label={isConfirmingDelete ? "Click again to confirm delete" : "Delete memory"}
+            } ${deleteState.hasError ? "animate-shake" : ""}`}
+            aria-label={deleteState.isConfirming ? "Click again to confirm delete" : "Delete memory"}
           >
             <Trash 
               size={20} 
-              className={`${isConfirmingDelete ? " text-white animate-bounce-subtle" : ""}`}
+              className={`${deleteState.isConfirming ? " text-white animate-bounce-subtle" : ""}`}
             />
           </button>
         </div>
