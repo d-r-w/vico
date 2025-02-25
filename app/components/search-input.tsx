@@ -37,6 +37,15 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
 
     const handleKeyDown = async (e: React.KeyboardEvent<HTMLInputElement>) => {
       const value = e.currentTarget.value;
+      
+      if (e.key === 'Escape') {
+        setSearch('');
+        if (mode === MODES.SEARCH) {
+          router.push('/');
+        }
+        return;
+      }
+      
       if ((mode === MODES.CHAT || mode === MODES.DEEP) && e.key === 'Enter') {
         try {
           const response = await fetch('/api/memories/probe', {
