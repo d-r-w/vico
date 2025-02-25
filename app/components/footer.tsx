@@ -30,7 +30,7 @@ const badges: Badge[] = [
   }
 ];
 
-export default function Footer() {
+export function Footer() {
   return (
     <footer className="py-2 bg-gray-100 dark:bg-gray-800">
       <div className="container mx-auto flex justify-center items-center gap-4 flex-wrap">

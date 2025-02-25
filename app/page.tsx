@@ -2,7 +2,7 @@ import { Suspense } from "react";
 import type { Memory } from "@/app/types";
 import { MemoryCard } from "@/app/components/memory-card";
 import { ClientWrapper } from "@/app/components/client-wrapper";
-import Footer from "@/app/components/footer";
+import { Footer } from "@/app/components/footer";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
 export default async function Home({
