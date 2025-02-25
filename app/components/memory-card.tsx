@@ -228,7 +228,7 @@ function MemoryTextarea({ value, onChange }: MemoryTextareaProps) {
     <Textarea
       value={value}
       onChange={onChange}
-      className="w-full h-full resize-none bg-transparent hover:bg-accent/10 focus:bg-background transition-colors duration-200 overflow-y-auto"
+      className="w-full h-full resize-none bg-transparent hover:bg-accent/10 focus:bg-background transition-colors duration-200 overflow-y-auto text-xs"
       placeholder="Write your memory..."
     />
   );
