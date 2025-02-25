@@ -138,9 +138,11 @@ export function MemoryCard({ memory }: MemoryCardProps) {
         className="w-full max-w-md h-[32rem] flex flex-col"
       >
         <CardHeader className="flex justify-between items-center flex-none">
-          <CardTitle className="text-lg font-semibold line-clamp-2">
-            {editedMemory?.split("\n")[0]}
-          </CardTitle>
+          <div className="w-full border-b border-primary/20 pb-2">
+              <CardTitle className="text-lg font-semibold line-clamp-2 text-primary/80">
+                {editedMemory?.split("\n")[0]}
+              </CardTitle>
+          </div>
         </CardHeader>
         <CardContent className="flex-1 flex flex-col min-h-0">
           <div className="flex flex-col h-full gap-4">
