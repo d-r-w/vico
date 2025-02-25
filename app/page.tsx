@@ -13,7 +13,7 @@ export default async function Home({
   const search = searchParams.search ?? "";
 
   return (
-    <div className="h-screen flex flex-col bg-background font-sans">
+    <div className="h-screen flex flex-col bg-background font-mono">
       <ScrollArea className="flex-1">
         <div className="min-h-full">
           <ClientWrapper initialSearch={search} />
