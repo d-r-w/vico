@@ -127,7 +127,7 @@ def infer_with_context(context, query, deep = False):
 
         sources=[18, 20, 23]
         """},
-        {"role": "user", "content": query}
+        {"role": "user", "content": f"Based on <memories>, please answer the following query: {query}"}
     ]
     
     prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
