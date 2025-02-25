@@ -15,9 +15,9 @@ interface CodeProps {
 
 export function ResponseDisplay({ content }: ResponseDisplayProps) {
   return (
-    <Card className="w-full max-w-3xl mx-auto mt-3">
+    <Card className="w-full mx-auto mt-3 max-h-[30vh] overflow-y-auto text-xs">
       <CardContent className="p-3">
-        <ScrollArea className="h-[60vh] w-full pr-2">
+        <ScrollArea className="w-full pr-2">
           <div className="prose dark:prose-invert prose-sm sm:prose-base lg:prose-lg">
             <ReactMarkdown
               components={{

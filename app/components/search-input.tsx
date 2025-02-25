@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, forwardRef, useImperativeHandle } from "react";
+import { useState, useRef, forwardRef, useImperativeHandle, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Input } from "@/components/ui/input";
 import { Mode, MODES } from "@/app/types";
@@ -20,12 +20,22 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
     const [search, setSearch] = useState(initialSearch);
     const router = useRouter();
     const inputRef = useRef<HTMLInputElement>(null);
+    const prevModeRef = useRef(mode);
 
     useImperativeHandle(ref, () => ({
       focus: () => {
         inputRef.current?.focus();
       }
     }));
+
+    // Clear search when mode changes (but not on initial render)
+    useEffect(() => {
+      if (prevModeRef.current !== mode) {
+        setSearch('');
+        router.push('/');
+        prevModeRef.current = mode;
+      }
+    }, [mode, router]);
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       const value = e.target.value;
@@ -53,7 +63,7 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ 
               query: value,
-              deep: mode === MODES.DEEP
+              isDeep: mode === MODES.DEEP
             }),
           });
           

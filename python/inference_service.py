@@ -73,8 +73,8 @@ def infer_general(query):
     prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
     return lm_generate(model, tokenizer, prompt, verbose=True)
 
-def infer_with_context(context, query):
-    model_name = "mlx-community/Qwen2.5-14B-Instruct-1M-bf16"
+def infer_with_context(context, query, deep = False):
+    model_name = "mlx-community/Qwen2.5-14B-Instruct-1M-bf16" if not deep else "mlx-community/DeepSeek-R1-Distill-Qwen-14B"
     model, tokenizer = model_manager.get_model(model_name, is_vlm=False)
     messages = [
         {"role": "system", "content": f"""
@@ -153,17 +153,27 @@ def recent_memories(search):
     memories = memory_storage_service.search_memories(search)
     return {"memories": memories}
 
+def _get_memories_xml():
+    memories = memory_storage_service.get_all_memories()
+    indent_sequence = "\n\t"
+    newline_char = "\n"
+    return "\n\n\n".join([f"<memory id='{memory_row[0]}' createdAt='{memory_row[1].strftime('%Y-%m-%d %H:%M')}'>\n\t{memory_row[2].replace(newline_char, indent_sequence)}\n</memory>" for memory_row in memories])
+
+@app.post("/api/chat_with_memories/")
+async def chat_with_memories(request: Request):
+    data = await request.json()
+    query = data.get('query', '')
+    memories_xml = _get_memories_xml()
+    
+    return {"response": str(infer_with_context(memories_xml, query))}
+
 @app.post("/api/probe_memories/")
 async def probe_memories(request: Request):
     data = await request.json()
     query = data.get('query', '')
-    memories = memory_storage_service.get_all_memories()
-
-    indent_sequence = "\n\t"
-    newline_char = "\n"
-    memories_xml = "\n\n\n".join([f"<memory id='{memory_row[0]}' createdAt='{memory_row[1].strftime('%Y-%m-%d %H:%M')}'>\n\t{memory_row[2].replace(newline_char, indent_sequence)}\n</memory>" for memory_row in memories])
+    memories_xml = _get_memories_xml()
     
-    return {"response": str(infer_with_context(memories_xml, query))}
+    return {"response": str(infer_with_context(memories_xml, query, deep=True))}
 
 @app.post("/api/save_memory/")
 async def save_memory(request: Request):

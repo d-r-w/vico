@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { INFERENCE_API_URL } from "../../config";
 
-async function probeMemories(query: string): Promise<{ response: string }> {
-  const response = await fetch(`${INFERENCE_API_URL}probe_memories/`, {
+async function probeMemories(query: string, isDeep: boolean): Promise<{ response: string }> {
+  const response = await fetch(`${INFERENCE_API_URL}${isDeep ? "probe_memories" : "chat_with_memories"}/`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ query }),
@@ -17,7 +17,7 @@ async function probeMemories(query: string): Promise<{ response: string }> {
 
 export async function POST(request: Request) {
   try {
-    const { query } = await request.json();
+    const { query, isDeep } = await request.json();
     
     if (!query?.trim()) {
       return NextResponse.json(
@@ -26,7 +26,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const result = await probeMemories(query);
+    const result = await probeMemories(query, isDeep);
     console.debug(result);
     return NextResponse.json(result);
   } catch (error) {
