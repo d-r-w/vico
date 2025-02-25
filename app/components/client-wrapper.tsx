@@ -1,10 +1,11 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import SearchInput, { SearchInputHandle } from "./search-input";
-import { ResponseDisplay } from "@/components/response-display";
+
 import { MODES, Mode } from "@/app/types";
-import { ThemeToggle } from "@/components/theme-toggle";
+import { SearchInput, SearchInputHandle } from "@/app/components/search-input";
+import { ResponseDisplay } from "@/app/components/response-display";
+import { ThemeToggle } from "@/app/components/theme-toggle";
 import { ModeToggle } from "@/app/components/mode-toggle";
 
 interface ClientWrapperProps {

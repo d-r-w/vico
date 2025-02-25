@@ -1,4 +1,4 @@
-export interface Memory {
+export type Memory = {
   id: number;
   memory: string;
   image: string | null;

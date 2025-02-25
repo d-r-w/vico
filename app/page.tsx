@@ -4,7 +4,7 @@ import { MemoryCard } from "@/app/components/memory-card";
 import { ClientWrapper } from "@/app/components/client-wrapper";
 import { Footer } from "@/app/components/footer";
 import { ScrollArea } from "@/components/ui/scroll-area";
-
+import { VICO_API_URL } from "@/app/api/config";
 export default async function Home({
   searchParams
 }: {
@@ -35,7 +35,7 @@ async function MemoryList({ search }: { search?: string }) {
 
   try {
     const response = await fetch(
-      `localhost:3000/api/memories${search ? `?search=${encodeURIComponent(search)}` : ""}`,
+      `${VICO_API_URL}memories${search ? `?search=${encodeURIComponent(search)}` : ""}`,
       { cache: "no-store" }
     );
     if (!response.ok) {

@@ -2,6 +2,7 @@
 
 import { useState, useRef, forwardRef, useImperativeHandle, useEffect } from "react";
 import { useRouter } from "next/navigation";
+
 import { Input } from "@/components/ui/input";
 import { Mode, MODES } from "@/app/types";
 
@@ -109,5 +110,4 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
 );
 
 SearchInput.displayName = "SearchInput";
-
-export default SearchInput;
+export { SearchInput };

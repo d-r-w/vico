@@ -1,8 +1,9 @@
 "use client";
 
-import { Button } from "@/components/ui/button";
 import { Search, MessageSquare, Telescope } from "lucide-react";
+
 import { MODES, Mode } from "@/app/types";
+import { Button } from "@/components/ui/button";
 
 interface ModeToggleProps {
   mode: Mode;

@@ -1,5 +1,7 @@
 "use client"
+
 import ReactMarkdown from "react-markdown"
+
 import { Card, CardContent } from "@/components/ui/card"
 import { ScrollArea } from "@/components/ui/scroll-area"
 

@@ -1,5 +1,5 @@
-import Image from "next/image";
 import { Fragment } from "react";
+import Image from "next/image";
 
 type Badge = {
   websiteUrl: string;

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { INFERENCE_API_URL } from "../../config";
+
+import { INFERENCE_API_URL } from "@/app/api/config";
 
 async function probeMemories(query: string, isDeep: boolean): Promise<{ response: string }> {
   const response = await fetch(`${INFERENCE_API_URL}${isDeep ? "probe_memories" : "chat_with_memories"}/`, {
