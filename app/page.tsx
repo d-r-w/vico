@@ -17,7 +17,7 @@ export default async function Home({
       <ScrollArea className="flex-1">
         <div className="min-h-full">
           <ClientWrapper initialSearch={search} />
-          <main className="container mx-auto px-4 py-8">
+          <main className="container mx-auto px-2 py-4">
             <Suspense fallback={<p className="text-xl text-center">Loading memories...</p>}>
               <MemoryList search={search} />
             </Suspense>

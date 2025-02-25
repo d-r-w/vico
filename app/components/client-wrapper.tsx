@@ -16,9 +16,9 @@ export function ClientWrapper({ initialSearch }: ClientWrapperProps) {
   const [mode, setMode] = useState<Mode>(MODES.SEARCH);
 
   return (
-    <header className="bg-primary text-primary-foreground py-6">
-      <div className="container mx-auto px-4">
-        <div className="flex items-center gap-4">
+    <header className="bg-primary text-primary-foreground py-3">
+      <div className="container mx-auto px-2">
+        <div className="flex items-center gap-2">
           <SearchOrChatToggle mode={mode} onModeChange={setMode} />
           <div className="flex-grow">
               <SearchInput 

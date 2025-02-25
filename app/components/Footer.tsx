@@ -32,8 +32,8 @@ const badges: Badge[] = [
 
 export default function Footer() {
   return (
-    <footer className="py-4 bg-gray-100 dark:bg-gray-800">
-      <div className="container mx-auto flex justify-center items-center gap-6 flex-wrap">
+    <footer className="py-2 bg-gray-100 dark:bg-gray-800">
+      <div className="container mx-auto flex justify-center items-center gap-4 flex-wrap">
         {badges.map((badge, index) => (
           <Fragment key={badge.websiteUrl}>
             {index > 0 && "+"}
