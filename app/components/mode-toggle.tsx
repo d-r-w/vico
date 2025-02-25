@@ -9,7 +9,7 @@ interface ModeToggleProps {
   onModeChange: (mode: Mode) => void;
 }
 
-export function SearchOrChatToggle({ mode, onModeChange }: ModeToggleProps) {
+export function ModeToggle({ mode, onModeChange }: ModeToggleProps) {
   return (
     <div className="flex rounded-md overflow-hidden border border-input">
       <Button
