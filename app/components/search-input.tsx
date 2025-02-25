@@ -25,12 +25,15 @@ export default function SearchInput({ initialSearch = "", mode, onResponseReceiv
 
   const handleKeyDown = async (e: React.KeyboardEvent<HTMLInputElement>) => {
     const value = e.currentTarget.value;
-    if (mode === MODES.CHAT && e.key === 'Enter') {
+    if ((mode === MODES.CHAT || mode === MODES.DEEP) && e.key === 'Enter') {
       try {
         const response = await fetch('/api/memories/probe', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query: value }),
+          body: JSON.stringify({ 
+            query: value,
+            deep: mode === MODES.DEEP
+          }),
         });
         
         if (!response.ok) throw new Error('Failed to probe memories');
@@ -43,13 +46,26 @@ export default function SearchInput({ initialSearch = "", mode, onResponseReceiv
     }
   };
 
+  const getPlaceholder = () => {
+    switch (mode) {
+      case MODES.SEARCH:
+        return "Search memories...";
+      case MODES.CHAT:
+        return "Ask about your memories...";
+      case MODES.DEEP:
+        return "Delve into your memories...";
+      default:
+        return "Search memories...";
+    }
+  };
+
   return (
     <div className="flex gap-2">
       <Input
         type={mode === MODES.SEARCH ? "search" : "text"}
         name={mode}
         autoComplete="off"
-        placeholder={mode === MODES.SEARCH ? "Search memories..." : "Ask about your memories..."}
+        placeholder={getPlaceholder()}
         value={search}
         onChange={handleChange}
         onKeyDown={handleKeyDown}

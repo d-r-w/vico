@@ -8,6 +8,7 @@ export interface Memory {
 export const MODES = {
   SEARCH: "search",
   CHAT: "chat",
+  DEEP: "deep",
 } as const;
 
 export type Mode = typeof MODES[keyof typeof MODES];
