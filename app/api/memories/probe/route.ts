@@ -3,11 +3,9 @@ import { NextResponse } from "next/server";
 import { INFERENCE_API_URL } from "@/app/api/config";
 
 async function probeMemories(query: string, isDeep: boolean): Promise<{ response: string }> {
-  const response = await fetch(`${INFERENCE_API_URL}${isDeep ? "probe_memories" : "chat_with_memories"}/`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query }),
-  });
+  const url = new URL(`${INFERENCE_API_URL}${isDeep ? "probe_memories" : "chat_with_memories"}`);
+  url.searchParams.set("query", query);
+  const response = await fetch(url);
 
   if (!response.ok) {
     throw new Error(`Failed to probe memories: ${response.statusText}`);
