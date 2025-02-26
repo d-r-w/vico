@@ -73,8 +73,8 @@ def infer_general(query):
     prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
     return lm_generate(model, tokenizer, prompt, verbose=True)
 
-def infer_with_context(context, query, deep = False):
-    model_name = "mlx-community/Qwen2.5-14B-Instruct-1M-bf16" if not deep else "mlx-community/DeepSeek-R1-Distill-Qwen-14B"
+def infer_with_context(context, query, is_deep = False):
+    model_name = "mlx-community/Qwen2.5-14B-Instruct-1M-bf16" if not is_deep else "mlx-community/DeepSeek-R1-Distill-Qwen-14B"
     model, tokenizer = model_manager.get_model(model_name, is_vlm=False)
     messages = [
         {"role": "system", "content": f"""
@@ -174,7 +174,7 @@ async def probe_memories(request: Request):
     query = data.get('query', '')
     memories_xml = _get_memories_xml()
     
-    return {"response": str(infer_with_context(memories_xml, query, deep=True))}
+    return {"response": str(infer_with_context(memories_xml, query, is_deep=True))}
 
 @app.post("/api/save_memory/")
 async def save_memory(request: Request):
