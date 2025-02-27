@@ -2,7 +2,7 @@ from __future__ import annotations
 from fastapi import FastAPI, Request
 from contextlib import asynccontextmanager
 from mlx_vlm import load as vlm_load, apply_chat_template, generate as vlm_generate
-from mlx_lm import load as lm_load, generate as lm_generate
+from mlx_lm import load as lm_load, stream_generate as lm_generate_streaming
 from mlx_lm.models.cache import load_prompt_cache, make_prompt_cache, save_prompt_cache
 from PIL import Image, ImageOps
 import io
@@ -163,15 +163,6 @@ def describe_image(image, memory_text = None):
     prompt = apply_chat_template(model_info.processor, model_info.config, messages)
     return vlm_generate(model_info.model, model_info.processor, prompt, image, verbose=True, max_tokens=10000, temperature=0.7)
 
-def infer_general(query):
-    model_name = "mlx-community/DeepSeek-R1-Distill-Qwen-14B"
-    model, tokenizer = model_registry.get_lm_model(model_name)
-    
-    messages = prompt_templates.get_general_template(query)
-    
-    prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
-    return lm_generate(model, tokenizer, prompt, verbose=True)
-
 def infer_with_context(context, query, is_deep = False):
     model_name = "mlx-community/Qwen2.5-14B-Instruct-1M-bf16" if not is_deep else "mlx-community/TinyR1-32B-Preview-8bit"
     # model_name = "mlx-community/Qwen2.5-14B-Instruct-1M-bf16" if not is_deep else "mlx-community/DeepSeek-R1-Distill-Qwen-14B"
@@ -179,24 +170,29 @@ def infer_with_context(context, query, is_deep = False):
     
     cache_key = f"{model_name.split('/')[-1]}_memory_cache"
     prompt_cache = cache_manager.get_cache(cache_key, model)
+    
+    messages = []
             
     if cache_manager.is_initialized(cache_key):
         logger.info(f"Using cached prompt, appending new query")
-        user_message = {"role": "user", "content": f"Based on <memories>, please answer the following query{'' if not is_deep else ', carefully considering each relevant memory in its entirety, one at a time.'}: {query}"}
-        prompt = tokenizer.apply_chat_template([user_message], add_generation_prompt=True)
+        messages.append({"role": "user", "content": f"Based on <memories>, please answer the following query{'' if not is_deep else ', carefully considering each relevant memory in its entirety, one at a time.'}: {query}"})
+        prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
         
-        return lm_generate(model, tokenizer, prompt, verbose=True, max_tokens=100000, prompt_cache=prompt_cache)
     else:
         logger.info(f"Building full prompt with context for {cache_key}")
         messages = prompt_templates.get_memory_chat_template(context, query, is_deep)
         
-        prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
-        response = lm_generate(model, tokenizer, prompt, verbose=True, max_tokens=100000, prompt_cache=prompt_cache)
-        
-        cache_manager.save_cache(cache_key)
-        cache_manager.mark_initialized(cache_key)
-        
-        return response
+    prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
+    response = lm_generate_streaming(model, tokenizer, prompt, max_tokens=100000, prompt_cache=prompt_cache)
+    
+    for response_part in response:
+        print(response_part.text, end="", flush=True)
+    print()
+
+    cache_manager.save_cache(cache_key)
+    cache_manager.mark_initialized(cache_key)
+    
+    return response
 
 def _process_image_memory(base64_string, memory_text = None):
     decoded_bytes = base64.b64decode(base64_string)
@@ -210,6 +206,22 @@ def _process_image_memory(base64_string, memory_text = None):
     
     memory_storage_service.save_memory(final_memory, decoded_bytes)
     cache_manager.invalidate_memory_caches()
+
+def stream_response(response):
+    from mlx_lm import load, stream_generate
+
+    model, tokenizer = model_registry.get_lm_model("mlx-community/TinyR1-32B-Preview-8bit")
+
+    prompt = "Write a story about Einstein"
+
+    messages = [{"role": "user", "content": prompt}]
+    prompt = tokenizer.apply_chat_template(
+        messages, add_generation_prompt=True
+    )
+
+    for response in stream_generate(model, tokenizer, prompt, max_tokens=100000, prompt_cache=prompt_cache):
+        print(response.text, end="", flush=True)
+    print()
 
 @app.get("/api/recent_memories/")
 def get_recent_memories(limit: int = Query(5, description="Number of memories to fetch")):

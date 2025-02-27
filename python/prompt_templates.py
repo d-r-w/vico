@@ -89,18 +89,3 @@ def get_image_description_template(memory_text=None):
         {"role": "system", "content": f"You are an expert at describing images in the fullest of detail, replacing vision for those who have lost it. Entire paragraphs explaining scenery, observations, annotations, and transcriptions are all desirable - longer descriptions are usually more helpful! The current date is {get_current_date()}."},
         {"role": "user", "content": f"{base_prompt}{context_block}"}
     ]
-
-def get_general_template(query):
-    """
-    Generate messages for general queries without memory context.
-    
-    Args:
-        query (str): The user's query
-    
-    Returns:
-        list: A list of message objects for the chat template
-    """
-    return [
-        {"role": "system", "content": f"You are a helpful assistant. The current date is {get_current_date()}."},
-        {"role": "user", "content": query}
-    ] 
