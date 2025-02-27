@@ -190,7 +190,8 @@ def infer_general(query):
     return lm_generate(model, tokenizer, prompt, verbose=True)
 
 def infer_with_context(context, query, is_deep = False):
-    model_name = "mlx-community/Qwen2.5-14B-Instruct-1M-bf16" if not is_deep else "mlx-community/DeepSeek-R1-Distill-Qwen-14B"
+    model_name = "mlx-community/Qwen2.5-14B-Instruct-1M-bf16" if not is_deep else "mlx-community/TinyR1-32B-Preview-8bit"
+    # model_name = "mlx-community/Qwen2.5-14B-Instruct-1M-bf16" if not is_deep else "mlx-community/DeepSeek-R1-Distill-Qwen-14B"
     model, tokenizer = model_registry.get_lm_model(model_name)
     
     cache_key = f"{model_name.split('/')[-1]}_memory_cache"
