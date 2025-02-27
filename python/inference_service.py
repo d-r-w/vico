@@ -24,9 +24,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("inference_service")
 
-# Classes for model management
 class ModelInfo:
-    """Container for VLM model components"""
     def __init__(self, model, processor, config):
         self.model = model
         self.processor = processor
@@ -36,13 +34,10 @@ class ModelInfo:
         return f"ModelInfo(model={self.model}, processor={self.processor}, config={self.config})"
 
 class ModelLoader:
-    """Base abstract class for model loading"""
     def load_model(self, model_name: str) -> Any:
-        """Load a model and return its components"""
         raise NotImplementedError("Subclasses must implement load_model")
 
 class VLMModelLoader(ModelLoader):
-    """Specialized loader for vision-language models"""
     def load_model(self, model_name: str) -> ModelInfo:
         logger.info(f"Loading VLM model: {model_name}...")
         model, processor = vlm_load(model_name)
@@ -51,7 +46,6 @@ class VLMModelLoader(ModelLoader):
         return ModelInfo(model, processor, config)
 
 class LMModelLoader(ModelLoader):
-    """Specialized loader for language models"""
     def load_model(self, model_name: str) -> Tuple[Any, Any]:
         logger.info(f"Loading LM model: {model_name}...")
         model, tokenizer = lm_load(model_name)
@@ -59,26 +53,22 @@ class LMModelLoader(ModelLoader):
         return (model, tokenizer)
 
 class ModelRegistry:
-    """Registry that manages loaded models"""
     def __init__(self):
         self._vlm_loader = VLMModelLoader()
         self._lm_loader = LMModelLoader()
         self._loaded_models: Dict[str, Any] = {}
     
     def get_vlm_model(self, model_name: str) -> ModelInfo:
-        """Get or load a VLM model"""
         if model_name not in self._loaded_models:
             self._loaded_models[model_name] = self._vlm_loader.load_model(model_name)
         return self._loaded_models[model_name]
     
     def get_lm_model(self, model_name: str) -> Tuple[Any, Any]:
-        """Get or load an LM model"""
         if model_name not in self._loaded_models:
             self._loaded_models[model_name] = self._lm_loader.load_model(model_name)
         return self._loaded_models[model_name]
 
 class CacheManager:
-    """Manages model prompt caches"""
     def __init__(self, cache_dir: str = "../data/prompt_caches"):
         self._prompt_caches: Dict[str, Any] = {}
         self._initialized_caches: Set[str] = set()
@@ -86,7 +76,6 @@ class CacheManager:
         os.makedirs(self._cache_dir, exist_ok=True)
     
     def get_cache(self, cache_key: str, model: Any) -> Any:
-        """Get or create a prompt cache for a model"""
         if cache_key in self._prompt_caches:
             logger.info(f"Using existing in-memory prompt cache for {cache_key}")
             return self._prompt_caches[cache_key]
@@ -107,17 +96,14 @@ class CacheManager:
         return prompt_cache
     
     def mark_initialized(self, cache_key: str) -> None:
-        """Mark a cache as fully initialized"""
         if cache_key in self._prompt_caches:
             self._initialized_caches.add(cache_key)
             logger.info(f"Marked cache {cache_key} as fully initialized")
     
     def is_initialized(self, cache_key: str) -> bool:
-        """Check if a cache is fully initialized"""
         return cache_key in self._initialized_caches
     
     def save_cache(self, cache_key: str) -> bool:
-        """Save a prompt cache to disk"""
         if cache_key in self._prompt_caches:
             cache_path = self._cache_dir / f"{cache_key}.safetensors"
             try:
@@ -131,12 +117,10 @@ class CacheManager:
         return False
     
     def save_all(self) -> None:
-        """Save all caches to disk"""
         for cache_key in list(self._prompt_caches.keys()):
             self.save_cache(cache_key)
     
     def invalidate_memory_caches(self) -> None:
-        """Invalidate all memory-related caches"""
         try:
             memory_cache_keys = [k for k in list(self._prompt_caches.keys()) if '_memory_cache' in k]
             
@@ -159,7 +143,6 @@ class CacheManager:
         except Exception as e:
             logger.error(f"Error invalidating caches: {e}")
 
-# Application setup
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
