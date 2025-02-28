@@ -2,9 +2,9 @@ import { Suspense } from "react";
 import type { Memory } from "@/app/types";
 import { MemoryCard } from "@/app/components/memory-card";
 import { ClientWrapper } from "@/app/components/client-wrapper";
-import Footer from "@/app/components/footer";
+import { Footer } from "@/app/components/footer";
 import { ScrollArea } from "@/components/ui/scroll-area";
-
+import { VICO_API_URL } from "@/app/api/config";
 export default async function Home({
   searchParams
 }: {
@@ -17,7 +17,7 @@ export default async function Home({
       <ScrollArea className="flex-1">
         <div className="min-h-full">
           <ClientWrapper initialSearch={search} />
-          <main className="container mx-auto px-2 py-4">
+          <main className="container mx-auto px-2 py-4 flex justify-center items-center">
             <Suspense fallback={<p className="text-xl text-center">Loading memories...</p>}>
               <MemoryList search={search} />
             </Suspense>
@@ -35,7 +35,7 @@ async function MemoryList({ search }: { search?: string }) {
 
   try {
     const response = await fetch(
-      `localhost:3000/api/memories${search ? `?search=${encodeURIComponent(search)}` : ""}`,
+      `${VICO_API_URL}memories${search ? `?search=${encodeURIComponent(search)}` : ""}`,
       { cache: "no-store" }
     );
     if (!response.ok) {

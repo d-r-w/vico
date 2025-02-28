@@ -1,12 +1,28 @@
-from fastapi import FastAPI, Request
+from __future__ import annotations
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Request, Query
+from fastapi.responses import StreamingResponse
 from mlx_vlm import load as vlm_load, apply_chat_template, generate as vlm_generate
-from mlx_lm import load as lm_load, generate as lm_generate
+from mlx_lm import load as lm_load, stream_generate as lm_generate_streaming
+from mlx_lm.models.cache import load_prompt_cache, make_prompt_cache, save_prompt_cache
 from PIL import Image, ImageOps
 import io
 import base64
 from datetime import datetime
 import memory_storage_service
 import threading
+import os
+from pathlib import Path
+import logging
+from pydantic import BaseModel, model_validator
+from typing import Optional, Dict, Any, Tuple, Union, Set
+import prompt_templates
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger("inference_service")
 
 class ModelInfo:
     def __init__(self, model, processor, config):
@@ -17,120 +33,162 @@ class ModelInfo:
     def __repr__(self):
         return f"ModelInfo(model={self.model}, processor={self.processor}, config={self.config})"
 
-class ModelManager:
-    def __init__(self):
-        self._loaded_models = {}
-    
-    def _load_vlm_model(self, model_name):
-        print(f"Loading VLM model: {model_name}...")
+class ModelLoader:
+    def load_model(self, model_name: str) -> Any:
+        raise NotImplementedError("Subclasses must implement load_model")
+
+class VLMModelLoader(ModelLoader):
+    def load_model(self, model_name: str) -> ModelInfo:
+        logger.info(f"Loading VLM model: {model_name}...")
         model, processor = vlm_load(model_name)
         config = model.config
-        self._loaded_models[model_name] = ModelInfo(model, processor, config)
-        print(f"VLM Model {model_name} loaded successfully.")
-    
-    def _load_lm_model(self, model_name):
-        print(f"Loading LM model: {model_name}...")
+        logger.info(f"VLM Model {model_name} loaded successfully.")
+        return ModelInfo(model, processor, config)
+
+class LMModelLoader(ModelLoader):
+    def load_model(self, model_name: str) -> Tuple[Any, Any]:
+        logger.info(f"Loading LM model: {model_name}...")
         model, tokenizer = lm_load(model_name)
-        self._loaded_models[model_name] = (model, tokenizer)
-        print(f"LM Model {model_name} loaded successfully.")
+        logger.info(f"LM Model {model_name} loaded successfully.")
+        return (model, tokenizer)
+
+class ModelRegistry:
+    def __init__(self):
+        self._vlm_loader = VLMModelLoader()
+        self._lm_loader = LMModelLoader()
+        self._loaded_models: Dict[str, Any] = {}
     
-    def get_model(self, model_name, is_vlm=True):
+    def get_vlm_model(self, model_name: str) -> ModelInfo:
         if model_name not in self._loaded_models:
-            if is_vlm:
-                self._load_vlm_model(model_name)
-            else:
-                self._load_lm_model(model_name)
+            self._loaded_models[model_name] = self._vlm_loader.load_model(model_name)
+        return self._loaded_models[model_name]
+    
+    def get_lm_model(self, model_name: str) -> Tuple[Any, Any]:
+        if model_name not in self._loaded_models:
+            self._loaded_models[model_name] = self._lm_loader.load_model(model_name)
         return self._loaded_models[model_name]
 
-app = FastAPI()
-model_manager = ModelManager()
+class CacheManager:
+    def __init__(self, cache_dir: str = "../data/prompt_caches"):
+        self._prompt_caches: Dict[str, Any] = {}
+        self._initialized_caches: Set[str] = set()
+        self._cache_dir = Path(cache_dir)
+        os.makedirs(self._cache_dir, exist_ok=True)
+    
+    def get_cache(self, cache_key: str, model: Any) -> Any:
+        if cache_key in self._prompt_caches:
+            logger.info(f"Using existing in-memory prompt cache for {cache_key}")
+            return self._prompt_caches[cache_key]
+
+        cache_path = self._cache_dir / f"{cache_key}.safetensors"
+        if cache_path.exists():
+            logger.info(f"Loading prompt cache from disk: {cache_path}")
+            try:
+                self._prompt_caches[cache_key] = load_prompt_cache(str(cache_path))
+                self._initialized_caches.add(cache_key)
+                return self._prompt_caches[cache_key]
+            except Exception as e:
+                logger.error(f"Error loading prompt cache from disk: {e}")
+        
+        logger.info(f"Creating new prompt cache for {cache_key}")
+        prompt_cache = make_prompt_cache(model)
+        self._prompt_caches[cache_key] = prompt_cache
+        return prompt_cache
+    
+    def mark_initialized(self, cache_key: str) -> None:
+        if cache_key in self._prompt_caches:
+            self._initialized_caches.add(cache_key)
+            logger.info(f"Marked cache {cache_key} as fully initialized")
+    
+    def is_initialized(self, cache_key: str) -> bool:
+        return cache_key in self._initialized_caches
+    
+    def save_cache(self, cache_key: str) -> bool:
+        if cache_key in self._prompt_caches:
+            cache_path = self._cache_dir / f"{cache_key}.safetensors"
+            try:
+                logger.info(f"Saving prompt cache to disk: {cache_path}")
+                save_prompt_cache(str(cache_path), self._prompt_caches[cache_key])
+                self._initialized_caches.add(cache_key)
+                return True
+            except Exception as e:
+                logger.error(f"Error saving prompt cache {cache_key}: {e}")
+                return False
+        return False
+    
+    def save_all(self) -> None:
+        for cache_key in list(self._prompt_caches.keys()):
+            self.save_cache(cache_key)
+    
+    def invalidate_memory_caches(self) -> None:
+        try:
+            memory_cache_keys = [k for k in list(self._prompt_caches.keys()) if '_memory_cache' in k]
+            
+            for cache_key in memory_cache_keys:
+                logger.info(f"Invalidating in-memory cache: {cache_key}")
+                if cache_key in self._prompt_caches:
+                    del self._prompt_caches[cache_key]
+                
+                if cache_key in self._initialized_caches:
+                    self._initialized_caches.remove(cache_key)
+                    logger.info(f"Removed {cache_key} from initialized caches")
+                
+                cache_path = self._cache_dir / f"{cache_key}.safetensors"
+                if cache_path.exists():
+                    logger.info(f"Removing outdated cache file: {cache_path}")
+                    try:
+                        os.remove(cache_path)
+                    except OSError as e:
+                        logger.warning(f"Error deleting cache file {cache_path}: {e}")
+        except Exception as e:
+            logger.error(f"Error invalidating caches: {e}")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    cache_manager.save_all()
+
+app = FastAPI(lifespan=lifespan)
+model_registry = ModelRegistry()
+cache_manager = CacheManager()
 
 def get_current_date():
     return datetime.today().strftime('%Y-%m-%d')
 
 def describe_image(image, memory_text = None):
-    model_info = model_manager.get_model("mlx-community/Qwen2.5-VL-72B-Instruct-4bit", is_vlm=True)
+    model_info = model_registry.get_vlm_model("mlx-community/Qwen2.5-VL-72B-Instruct-4bit")
     
-    base_prompt = "Describe the image in the fullest of detail, per your instructions. In your final answer, include the summary of your observations."
-    context_block = f"\n\n<image_context>\n\t{memory_text}\n</image_context>\n\n" if memory_text else ""
-    
-    messages = [
-        {"role": "system", "content": f"You are an expert at describing images in the fullest of detail, replacing vision for those who have lost it. Entire paragraphs explaining scenery, observations, annotations, and transcriptions are all desirable - longer descriptions are usually more helpful! The current date is {get_current_date()}."},
-        {"role": "user", "content": f"{base_prompt}{context_block}"}
-    ]
+    messages = prompt_templates.get_image_description_template(memory_text)
     
     prompt = apply_chat_template(model_info.processor, model_info.config, messages)
     return vlm_generate(model_info.model, model_info.processor, prompt, image, verbose=True, max_tokens=10000, temperature=0.7)
 
-def infer_general(query):
-    model_name = "mlx-community/DeepSeek-R1-Distill-Qwen-14B"
-    model, tokenizer = model_manager.get_model(model_name, is_vlm=False)
-    messages = [
-            {"role": "system", "content": f"You are a helpful assistant. The current date is {get_current_date()}."},
-            {"role": "user", "content": query}
-    ]
+def infer_with_context(context, query, is_deep = False):
+    model_name = "mlx-community/Qwen2.5-14B-Instruct-1M-bf16" if not is_deep else "mlx-community/TinyR1-32B-Preview-8bit"
+    # model_name = "mlx-community/Qwen2.5-14B-Instruct-1M-bf16" if not is_deep else "mlx-community/DeepSeek-R1-Distill-Qwen-14B"
+    model, tokenizer = model_registry.get_lm_model(model_name)
     
-    prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
-    return lm_generate(model, tokenizer, prompt, verbose=True)
-
-def infer_with_context(context, query):
-    model_name = "mlx-community/Qwen2.5-14B-Instruct-1M-bf16"
-    model, tokenizer = model_manager.get_model(model_name, is_vlm=False)
-    messages = [
-        {"role": "system", "content": f"""
-        <memories>
-            {context}
-        </memories>
-        
-        <role>
-            The current date is {get_current_date()}.
-            You are a master of searching through memories and understanding how they relate and overlap.
-            You have the ability to accurately catalog and reference memories.
-        </role>
-        
-        <instructions>
-            Always refer to <memories> when responding to user queries.
-            Always consider every memory in its entirety while responding - being as complete as possible is the goal.
-            Always end your response with an array of citations that refer to individual memories that relate to your response like this: `sources=[37, 73, 219]`.
-        </instructions>
-        """},
-        {"role": "user", "content": "What is the news from 2025-02-14?"},
-        {"role": "assistant", "content": f"""
-        2025-02-14 news includes several notable updates:
-
-        1. **Elon Musk's DOGE Audit into SEC**: There's a significant announcement that DOGE, associated with Elon Musk, is conducting an audit into the Securities and Exchange Commission (SEC) for fraud, abuse, and waste. This news has garnered substantial attention, with 268,000 views and high levels of user engagement on social media platforms.
-
-        2. **Elon Musk Proposes Live Video Tour of Fort Knox**: Elon Musk has proposed a live video tour of Fort Knox to verify the presence of 4,580 tons of gold. This breaking news has received considerable attention on Twitter, with 304 comments, 948 retweets, and 7,000 likes. The tweet has been viewed 78,000 times.
-
-        These are the key news items from today, focusing on the actions and proposals related to Elon Musk and the financial sector.
-        
-        sources=[9, 13]
-        """},
-        {"role": "user", "content": "What is my latest achievement as of 2025-02-14?"},
-        {"role": "assistant", "content": f"""
-        Your latest achievement from 2025-02-14 is at 11:24 - the successful implementation and storage of your first memory fully manually, which you noted with excitement. This marks a significant step in the functionality and reliability of your second brain.
-        
-        sources=[10]
-        """},
-        {"role": "user", "content": "Search all memories relating to russia prior to 2025-02-14"},
-        {"role": "assistant", "content": f"""
-        Based on your request to search for memories related to `Russia` prior to 2025-02-14, here are all matching entries:
-
-        1. A screenshot from a YouTube video titled \"Russia Is Hijacking US Military Military Satellites,\" posted by a user named \"saveitforparts.\" The video discusses the potential threat of Russian military satellites interfering with or taking control of U.S. military satellite communications. The video has gained significant attention, with 13,000 views in just five hours. The screenshot shows a black-and-white diagram illustrating a complex network of military communications and satellite systems, with a specific focus on the alleged interference by Russian satellites.
-
-        2. A tweet from Emmanuel Macron, the President of France, posted on X (formerly Twitter). The tweet discusses recent diplomatic efforts and strategies regarding the conflict in Ukraine. It emphasizes the need for a strong and lasting peace, the importance of collaboration among European, American, and Ukrainian leaders, and the necessity for Europeans to invest in their security and defense. The tweet also highlights the urgency of implementing the European agenda for sovereignty and competitiveness, as defined at the Versailles Summit in 2022.
-
-        3. Kalob Byers Wayne's Release: Russia has freed an American prisoner named Kalob Byers Wayne, who was arrested on drug charges on February 7th. His release occurred on the eve of talks between Russia and the U.S. concerning the war in Ukraine. This event is significant as it suggests a possible connection between the prisoner's release and the upcoming diplomatic discussions. This news highlights a diplomatic move by Russia just before planned talks with the U.S., potentially aimed at easing tensions or setting a positive tone for the discussions.
-
-        These entries provide insights into both the geopolitical tensions involving Russia and the ongoing diplomatic efforts concerning Ukraine.
-
-        sources=[18, 20, 23]
-        """},
-        {"role": "user", "content": query}
-    ]
+    cache_key = f"{model_name.split('/')[-1]}_memory_cache"
+    prompt_cache = cache_manager.get_cache(cache_key, model)
     
+    messages = []
+            
+    if cache_manager.is_initialized(cache_key):
+        logger.info(f"Using cached prompt, appending new query")
+        messages.append({"role": "user", "content": f"Based on <memories>, please answer the following query{'' if not is_deep else ', carefully considering each relevant memory in its entirety, one at a time.'}: {query}"})
+        
+    else:
+        logger.info(f"Building full prompt with context for {cache_key}")
+        messages = prompt_templates.get_memory_chat_template(context, query, is_deep)
+        
     prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
-    return lm_generate(model, tokenizer, prompt, verbose=True, max_tokens=100000)
+    response = lm_generate_streaming(model, tokenizer, prompt, max_tokens=100000, prompt_cache=prompt_cache)
+    
+    for response_part in response:
+        yield response_part.text
+
+    cache_manager.save_cache(cache_key)
+    cache_manager.mark_initialized(cache_key)
 
 def _process_image_memory(base64_string, memory_text = None):
     decoded_bytes = base64.b64decode(base64_string)
@@ -141,50 +199,76 @@ def _process_image_memory(base64_string, memory_text = None):
         f"{memory_text}\n\nImage: {image_description}" if memory_text 
         else f"Image: {image_description}"
     )
+    
     memory_storage_service.save_memory(final_memory, decoded_bytes)
+    cache_manager.invalidate_memory_caches()
 
 @app.get("/api/recent_memories/")
-def recent_memories(limit: int = 5):
+def get_recent_memories(limit: int = Query(5, description="Number of memories to fetch")):
     memories = memory_storage_service.get_recent_memories(limit)
+    
     return {"memories": memories}
 
 @app.get("/api/search_memories/")
-def recent_memories(search):
+def search_memories(search: str = Query(..., description="Search query")):
     memories = memory_storage_service.search_memories(search)
+    
     return {"memories": memories}
 
-@app.post("/api/probe_memories/")
-async def probe_memories(request: Request):
-    data = await request.json()
-    query = data.get('query', '')
+def _get_memories_xml():
     memories = memory_storage_service.get_all_memories()
-
     indent_sequence = "\n\t"
     newline_char = "\n"
-    memories_xml = "\n\n\n".join([f"<memory id='{memory_row[0]}' createdAt='{memory_row[1].strftime('%Y-%m-%d %H:%M')}'>\n\t{memory_row[2].replace(newline_char, indent_sequence)}\n</memory>" for memory_row in memories])
     
-    return {"response": str(infer_with_context(memories_xml, query))}
+    return "\n\n\n".join([f"<memory id='{memory_row[0]}' createdAt='{memory_row[1].strftime('%Y-%m-%d %H:%M')}'>\n\t{memory_row[2].replace(newline_char, indent_sequence)}\n</memory>" for memory_row in memories])
+
+def stream_response(query: str, is_deep: bool = False):
+    memories_xml = _get_memories_xml()
+    
+    def token_generator():
+        for token in infer_with_context(memories_xml, query, is_deep=is_deep):
+            yield token
+            
+    return StreamingResponse(token_generator(), media_type="text/plain")
+
+@app.get("/api/chat_with_memories/")
+def chat_with_memories(query: str = Query(..., description="Chat query")):
+    return stream_response(query)
+
+@app.get("/api/probe_memories/")
+async def probe_memories(query: str = Query(..., description="Probe query")):
+    return stream_response(query, is_deep=True)
+
+class SaveMemoryRequest(BaseModel):
+    memory_text: Optional[str] = None
+    memory_image_base64: Optional[str] = None
+    
+    @model_validator(mode="after")
+    def require_one(cls, model: SaveMemoryRequest) -> SaveMemoryRequest:
+        if not (model.memory_text or model.memory_image_base64):
+            raise ValueError("Either memory_text or memory_image_base64 must be provided")
+        return model
 
 @app.post("/api/save_memory/")
-async def save_memory(request: Request):
-    
-    memory_data = await request.json()
-    
-    memory_text = memory_data.get('text')
-    memory_image_base64_string = memory_data.get('image')
-    
-    if memory_image_base64_string:
-        memory_image_base64_string = memory_image_base64_string.split(',', 1)[1] # Remove `data:png,` etc
-        threading.Thread(target=_process_image_memory, args=(memory_image_base64_string,memory_text)).start()
+async def save_memory(request: SaveMemoryRequest):
+    if request.memory_image_base64:
+        request.memory_image_base64 = request.memory_image_base64.split(',', 1)[1] # Remove `data:png,` etc
+        threading.Thread(target=_process_image_memory, args=(request.memory_image_base64, request.memory_text)).start()
         return {"success": True}
 
-    if memory_text:
-        memory_storage_service.save_memory(memory_text)
+    if request.memory_text:
+        memory_storage_service.save_memory(request.memory_text)
+        cache_manager.invalidate_memory_caches()
         return {"success": True}
     
-@app.get("/api/delete_memory/")
-async def delete_memory(id):
-    memory_storage_service.delete_memory(id)
+
+class DeleteMemoryRequest(BaseModel):
+    memory_id: int
+
+@app.delete("/api/delete_memory/")
+async def delete_memory(request: DeleteMemoryRequest):
+    memory_storage_service.delete_memory(request.memory_id)
+    cache_manager.invalidate_memory_caches() 
     return {"success": True}
 
 @app.patch("/api/edit_memory/")
@@ -197,8 +281,9 @@ async def edit_memory(request: Request):
         return {"success": False, "error": "Both id and memory are required"}, 400
         
     memory_storage_service.edit_memory(memory_id, new_memory_text)
+    cache_manager.invalidate_memory_caches()
     return {"success": True}
-    
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=3020)

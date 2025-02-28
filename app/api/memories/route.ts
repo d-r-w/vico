@@ -1,9 +1,8 @@
 import type { Memory } from "@/app/types";
 import { NextResponse } from "next/server";
+import { INFERENCE_API_URL } from "@/app/api/config";
 
-import { INFERENCE_API_URL } from "../config";
-
-async function fetchMemories(url: string): Promise<Memory[]> {
+async function fetchMemories(url: URL): Promise<Memory[]> {
   const response = await fetch(url);
   if (!response.ok) {
     throw new Error(`HTTP error! status: ${response.status}`);
@@ -20,21 +19,33 @@ async function fetchMemories(url: string): Promise<Memory[]> {
   }));
 }
 
+const getJSONRequest = (method: string, bodyJSON: string) => {
+  return {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: bodyJSON
+  }
+}
+
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const search = searchParams.get("search");
 
     if (search) {
-      const memories = await fetchMemories(
-        `${INFERENCE_API_URL}search_memories/?search=${encodeURIComponent(search)}`
-      );
+      const url = new URL(`${INFERENCE_API_URL}search_memories/`);
+      url.searchParams.set("search", search);
+
+      const memories = await fetchMemories(url);
       return NextResponse.json({ memories });
     }
 
-    const memories = await fetchMemories(
-      `${INFERENCE_API_URL}recent_memories/?limit=50`
-    );
+    const url = new URL(`${INFERENCE_API_URL}recent_memories/`);
+    url.searchParams.set("limit", "50");
+
+    const memories = await fetchMemories(url);
     return NextResponse.json({ memories });
   } catch (error) {
     console.error("Failed to fetch memories", error);
@@ -55,7 +66,8 @@ export async function DELETE(request: Request) {
     }
 
     const response = await fetch(
-      `${INFERENCE_API_URL}delete_memory/?id=${encodeURIComponent(id)}`
+      `${INFERENCE_API_URL}delete_memory/`,
+      getJSONRequest('DELETE', JSON.stringify({ memory_id: id }))
     );
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
@@ -80,13 +92,7 @@ export async function PATCH(request: Request) {
       throw new Error("Both `id` and `memory` are required");
     }
 
-    const response = await fetch(`${INFERENCE_API_URL}edit_memory/`, {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ id, memory }),
-    });
+    const response = await fetch(`${INFERENCE_API_URL}edit_memory/`, getJSONRequest('PATCH', JSON.stringify({ id, memory })));
 
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);

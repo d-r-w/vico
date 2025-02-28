@@ -1,4 +1,4 @@
-export interface Memory {
+export type Memory = {
   id: number;
   memory: string;
   image: string | null;
@@ -8,6 +8,7 @@ export interface Memory {
 export const MODES = {
   SEARCH: "search",
   CHAT: "chat",
+  DEEP: "deep",
 } as const;
 
 export type Mode = typeof MODES[keyof typeof MODES];

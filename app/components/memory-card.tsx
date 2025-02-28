@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import Image from "next/image";
 import { CalendarIcon, Trash, Save, X } from "lucide-react";
 
+import type { Memory } from "@/app/types";
 import {
   Card,
   CardContent,
@@ -12,7 +13,6 @@ import {
   CardTitle
 } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
-import type { Memory } from "@/app/types";
 
 interface MemoryCardProps {
   memory: Memory;
