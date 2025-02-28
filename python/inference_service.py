@@ -251,7 +251,6 @@ class SaveMemoryRequest(BaseModel):
 
 @app.post("/api/save_memory/")
 async def save_memory(request: SaveMemoryRequest):
-    print(request)
     if request.memory_image_base64:
         request.memory_image_base64 = request.memory_image_base64.split(',', 1)[1] # Remove `data:png,` etc
         threading.Thread(target=_process_image_memory, args=(request.memory_image_base64, request.memory_text)).start()
