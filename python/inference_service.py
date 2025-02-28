@@ -1,6 +1,7 @@
 from __future__ import annotations
-from fastapi import FastAPI, Request
 from contextlib import asynccontextmanager
+from fastapi import FastAPI, Request, Query
+from fastapi.responses import StreamingResponse
 from mlx_vlm import load as vlm_load, apply_chat_template, generate as vlm_generate
 from mlx_lm import load as lm_load, stream_generate as lm_generate_streaming
 from mlx_lm.models.cache import load_prompt_cache, make_prompt_cache, save_prompt_cache
@@ -15,7 +16,6 @@ from pathlib import Path
 import logging
 from pydantic import BaseModel, model_validator
 from typing import Optional, Dict, Any, Tuple, Union, Set
-from fastapi import Query
 import prompt_templates
 
 logging.basicConfig(
@@ -176,7 +176,6 @@ def infer_with_context(context, query, is_deep = False):
     if cache_manager.is_initialized(cache_key):
         logger.info(f"Using cached prompt, appending new query")
         messages.append({"role": "user", "content": f"Based on <memories>, please answer the following query{'' if not is_deep else ', carefully considering each relevant memory in its entirety, one at a time.'}: {query}"})
-        prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
         
     else:
         logger.info(f"Building full prompt with context for {cache_key}")
@@ -186,13 +185,10 @@ def infer_with_context(context, query, is_deep = False):
     response = lm_generate_streaming(model, tokenizer, prompt, max_tokens=100000, prompt_cache=prompt_cache)
     
     for response_part in response:
-        print(response_part.text, end="", flush=True)
-    print()
+        yield response_part.text
 
     cache_manager.save_cache(cache_key)
     cache_manager.mark_initialized(cache_key)
-    
-    return response
 
 def _process_image_memory(base64_string, memory_text = None):
     decoded_bytes = base64.b64decode(base64_string)
@@ -206,22 +202,6 @@ def _process_image_memory(base64_string, memory_text = None):
     
     memory_storage_service.save_memory(final_memory, decoded_bytes)
     cache_manager.invalidate_memory_caches()
-
-def stream_response(response):
-    from mlx_lm import load, stream_generate
-
-    model, tokenizer = model_registry.get_lm_model("mlx-community/TinyR1-32B-Preview-8bit")
-
-    prompt = "Write a story about Einstein"
-
-    messages = [{"role": "user", "content": prompt}]
-    prompt = tokenizer.apply_chat_template(
-        messages, add_generation_prompt=True
-    )
-
-    for response in stream_generate(model, tokenizer, prompt, max_tokens=100000, prompt_cache=prompt_cache):
-        print(response.text, end="", flush=True)
-    print()
 
 @app.get("/api/recent_memories/")
 def get_recent_memories(limit: int = Query(5, description="Number of memories to fetch")):
@@ -242,17 +222,22 @@ def _get_memories_xml():
     
     return "\n\n\n".join([f"<memory id='{memory_row[0]}' createdAt='{memory_row[1].strftime('%Y-%m-%d %H:%M')}'>\n\t{memory_row[2].replace(newline_char, indent_sequence)}\n</memory>" for memory_row in memories])
 
-@app.get("/api/chat_with_memories/")
-async def chat_with_memories(query: str = Query(..., description="Chat query")):
+def stream_response(query: str, is_deep: bool = False):
     memories_xml = _get_memories_xml()
     
-    return {"response": str(infer_with_context(memories_xml, query))}
+    def token_generator():
+        for token in infer_with_context(memories_xml, query, is_deep=is_deep):
+            yield token
+            
+    return StreamingResponse(token_generator(), media_type="text/plain")
+
+@app.get("/api/chat_with_memories/")
+def chat_with_memories(query: str = Query(..., description="Chat query")):
+    return stream_response(query)
 
 @app.get("/api/probe_memories/")
 async def probe_memories(query: str = Query(..., description="Probe query")):
-    memories_xml = _get_memories_xml()
-    
-    return {"response": str(infer_with_context(memories_xml, query, is_deep=True))}
+    return stream_response(query, is_deep=True)
 
 class SaveMemoryRequest(BaseModel):
     memory_text: Optional[str] = None

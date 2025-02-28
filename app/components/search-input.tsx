@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 
 import { Input } from "@/components/ui/input";
 import { Mode, MODES } from "@/app/types";
+import { Loader2 } from "lucide-react";
 
 interface SearchInputProps {
   initialSearch?: string;
@@ -22,6 +23,7 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
     const router = useRouter();
     const inputRef = useRef<HTMLInputElement>(null);
     const prevModeRef = useRef(mode);
+    const [isLoading, setIsLoading] = useState(false);
 
     useImperativeHandle(ref, () => ({
       focus: () => {
@@ -29,7 +31,6 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
       }
     }));
 
-    // Clear search when mode changes (but not on initial render)
     useEffect(() => {
       if (prevModeRef.current !== mode) {
         setSearch('');
@@ -46,6 +47,50 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
       }
     };
 
+    const handleSubmit = async (value: string) => {
+      if (mode === MODES.CHAT || mode === MODES.DEEP) {
+        try {
+          setIsLoading(true);
+          onResponseReceived?.('');
+          
+          const response = await fetch('/api/memories/probe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+              query: value,
+              isDeep: mode === MODES.DEEP
+            }),
+          });
+          
+          if (!response.ok) throw new Error('Failed to probe memories');
+          
+          const reader = response.body?.getReader();
+          if (!reader) throw new Error('Response body is null');
+          
+          const decoder = new TextDecoder();
+          let accumulatedResponse = '';
+          
+          while (true) {
+            const { done, value } = await reader.read();
+            
+            if (done) {
+              break;
+            }
+            
+            const chunk = decoder.decode(value, { stream: true });
+            accumulatedResponse += chunk;
+            
+            onResponseReceived?.(accumulatedResponse);
+          }
+        } catch (error) {
+          console.error('Failed to probe memories:', error);
+          onResponseReceived?.('Error: Failed to retrieve response');
+        } finally {
+          setIsLoading(false);
+        }
+      }
+    };
+
     const handleKeyDown = async (e: React.KeyboardEvent<HTMLInputElement>) => {
       const value = e.currentTarget.value;
       
@@ -58,23 +103,8 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
       }
       
       if ((mode === MODES.CHAT || mode === MODES.DEEP) && e.key === 'Enter') {
-        try {
-          const response = await fetch('/api/memories/probe', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-              query: value,
-              isDeep: mode === MODES.DEEP
-            }),
-          });
-          
-          if (!response.ok) throw new Error('Failed to probe memories');
-          
-          const result = await response.json();
-          onResponseReceived?.(result.response);
-        } catch (error) {
-          console.error('Failed to probe memories:', error);
-        }
+        e.preventDefault();
+        await handleSubmit(value);
       }
     };
 
@@ -92,19 +122,33 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
     };
 
     return (
-      <div className="flex gap-2">
-        <Input
-          ref={inputRef}
-          type={mode === MODES.SEARCH ? "search" : "text"}
-          name={mode}
-          autoComplete="off"
-          placeholder={getPlaceholder()}
-          value={search}
-          onChange={handleChange}
-          onKeyDown={handleKeyDown}
-          className="flex-grow"
-        />
-      </div>
+      <>
+        {isLoading ? (
+          <div className="flex justify-center">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : (
+          <form 
+            className="flex gap-2 relative"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              await handleSubmit(search);
+            }}
+          >
+            <Input
+              ref={inputRef}
+              type={mode === MODES.SEARCH ? "search" : "text"}
+              name={mode}
+              autoComplete="off"
+              placeholder={getPlaceholder()}
+              value={search}
+              onChange={handleChange}
+              onKeyDown={handleKeyDown}
+              className="flex-grow"
+            />
+          </form>
+        )}
+      </>
     );
   }
 );

@@ -31,17 +31,19 @@ export function ClientWrapper({ initialSearch }: ClientWrapperProps) {
   return (
     <header className="bg-primary text-primary-foreground py-3">
       <div className="container mx-auto px-2">
-        <div className="flex items-center gap-2">
-          <ModeToggle mode={mode} onModeChange={handleModeChange} />
-          <div className="flex-grow">
-              <SearchInput 
-                ref={searchInputRef}
-                initialSearch={initialSearch} 
-                mode={mode} 
-                onResponseReceived={setResponse}
-              />
-            </div>
-          <ThemeToggle />
+        <div className="flex flex-col sm:flex-row items-center gap-2">
+          <div className="flex items-center gap-2 w-full justify-between sm:w-auto">
+            <ModeToggle mode={mode} onModeChange={handleModeChange} />
+            <ThemeToggle />
+          </div>
+          <div className="w-full">
+            <SearchInput 
+              ref={searchInputRef}
+              initialSearch={initialSearch} 
+              mode={mode} 
+              onResponseReceived={setResponse}
+            />
+          </div>
         </div>
         {response && <ResponseDisplay content={response} />}
       </div>
