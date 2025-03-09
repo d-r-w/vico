@@ -164,7 +164,9 @@ def describe_image(image, memory_text = None):
     return vlm_generate(model_info.model, model_info.processor, prompt, image, verbose=True, max_tokens=10000, temperature=0.7)
 
 def infer_with_context(context, query, is_deep = False):
-    model_name = "mlx-community/Qwen2.5-14B-Instruct-1M-bf16" if not is_deep else "mlx-community/TinyR1-32B-Preview-8bit"
+    # mlx-community/QwQ-32B-8bit
+    model_name = "mlx-community/Qwen2.5-14B-Instruct-1M-bf16" if not is_deep else "mlx-community/QwQ-32B-8bit" # Testing
+    # model_name = "mlx-community/Qwen2.5-14B-Instruct-1M-bf16" if not is_deep else "mlx-community/TinyR1-32B-Preview-8bit" # Works well
     # model_name = "mlx-community/Qwen2.5-14B-Instruct-1M-bf16" if not is_deep else "mlx-community/DeepSeek-R1-Distill-Qwen-14B"
     model, tokenizer = model_registry.get_lm_model(model_name)
     
