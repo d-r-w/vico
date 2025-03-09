@@ -36,8 +36,8 @@ def get_tool_call_results(response_text, logger, memory_storage_service, cache_m
                     memory_id = arguments.get("memory_id", "")
                     new_memory_text = arguments.get("new_memory_text", "")
                     logger.info(f"Editing memory: {memory_id} with new text: {new_memory_text}")
-                    # memory_storage_service.edit_memory(memory_id, new_memory_text) # Too scared to actually use without diff/approve
-                    # cache_manager.invalidate_memory_caches()
+                    memory_storage_service.edit_memory(memory_id, new_memory_text) # TODO Produce diff/approval vs yeeting
+                    cache_manager.invalidate_memory_caches()
                     
                 case "terminal_command":
                     arguments = tool_call_json.get("arguments", {})
