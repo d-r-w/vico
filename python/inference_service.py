@@ -2,7 +2,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Query
 from fastapi.responses import StreamingResponse
-from mlx_vlm import load as vlm_load, apply_chat_template, generate as vlm_generate
+from mlx_vlm import load as vlm_load, apply_chat_template as vlm_apply_chat_template, generate as vlm_generate
 from mlx_lm import load as lm_load, stream_generate as lm_generate_streaming
 from mlx_lm.models.cache import load_prompt_cache, make_prompt_cache, save_prompt_cache
 from PIL import Image, ImageOps
@@ -15,9 +15,10 @@ import os
 from pathlib import Path
 import logging
 from pydantic import BaseModel, model_validator
-from typing import Optional, Dict, Any, Tuple, Union, Set
+from typing import Optional, Dict, Any, Tuple, Set
 import prompt_templates
-
+from tools.tool_definitions import get_tool_definitions
+from tools.tool_executor import get_tool_call_results
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -160,7 +161,7 @@ def describe_image(image, memory_text = None):
     
     messages = prompt_templates.get_image_description_template(memory_text)
     
-    prompt = apply_chat_template(model_info.processor, model_info.config, messages)
+    prompt = vlm_apply_chat_template(model_info.processor, model_info.config, messages)
     return vlm_generate(model_info.model, model_info.processor, prompt, image, verbose=True, max_tokens=10000, temperature=0.7)
 
 def infer_with_context(context, query, is_deep = False):
@@ -183,13 +184,22 @@ def infer_with_context(context, query, is_deep = False):
         logger.info(f"Building full prompt with context for {cache_key}")
         messages = prompt_templates.get_memory_chat_template(context, query, is_deep)
         
-    prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
+    tools = get_tool_definitions()
+    prompt = tokenizer.apply_chat_template(messages, tools, add_generation_prompt=True, tokenize=False) # TODO Doesn't this mean that the tools are being added twice? (once when cached, once again always)
+    
     response = lm_generate_streaming(model, tokenizer, prompt, max_tokens=100000, prompt_cache=prompt_cache)
+    response_text = ""
     
     for response_part in response:
+        response_text += response_part.text
         yield response_part.text
+        
+    if "<tool_call>" in response_text:
+        logger.info("Tool call detected")
+        tool_call_results = get_tool_call_results(response_text, logger, memory_storage_service, cache_manager)
+        logger.info(f"Tool call results: {tool_call_results}") # TODO Use results for inference
 
-    cache_manager.save_cache(cache_key)
+    cache_manager.save_cache(cache_key) # TODO Does this need to happen for every call? Why?
     cache_manager.mark_initialized(cache_key)
 
 def _process_image_memory(base64_string, memory_text = None):
