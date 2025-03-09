@@ -175,7 +175,7 @@ def infer_with_context(context, query, is_deep = False):
             
     if cache_manager.is_initialized(cache_key):
         logger.info(f"Using cached prompt, appending new query")
-        messages.append({"role": "user", "content": f"Based on <memories>, please answer the following query{'' if not is_deep else ', carefully considering each relevant memory in its entirety, one at a time.'}: {query}"})
+        messages.append(prompt_templates.get_memory_user_query_message(query, is_deep))
         
     else:
         logger.info(f"Building full prompt with context for {cache_key}")
