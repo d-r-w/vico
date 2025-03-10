@@ -26,7 +26,7 @@ export default async function Home({ searchParams }: HomeProps) {
         </ResizablePanel>
         <ResizableHandle withHandle />
         <ResizablePanel defaultSize={60}>
-          <ScrollArea className="h-full">
+          <ScrollArea className="h-full pr-2.5">
             <main className="container mx-auto px-2 py-4">
               <Suspense fallback={<p className="text-xl text-center">Loading memories...</p>}>
                 <MemoryList search={search} />
@@ -69,10 +69,12 @@ async function MemoryList({ search }: { search?: string }) {
   }
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-      {data.map((memory) => (
-        <MemoryCard key={memory.id} memory={memory} />
-      ))}
+    <div className="flex justify-center">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 w-full sm:w-auto max-w-md sm:max-w-none">
+        {data.map((memory) => (
+          <MemoryCard key={memory.id} memory={memory} />
+        ))}
+      </div>
     </div>
   );
 }
