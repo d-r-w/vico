@@ -11,11 +11,11 @@ import {
   ResizableHandle 
 } from "@/components/ui/resizable";
 
-export default async function Home({
-  searchParams
-}: {
+interface HomeProps {
   searchParams: { search?: string };
-}) {
+}
+
+export default async function Home({ searchParams }: HomeProps) {
   const search = searchParams.search ?? "";
 
   return (
@@ -49,9 +49,11 @@ async function MemoryList({ search }: { search?: string }) {
       `${VICO_API_URL}memories${search ? `?search=${encodeURIComponent(search)}` : ""}`,
       { cache: "no-store" }
     );
+    
     if (!response.ok) {
       throw new Error("Failed to fetch data from the API.");
     }
+    
     const result = await response.json();
     data = result.memories;
   } catch (e) {
