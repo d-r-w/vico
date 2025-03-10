@@ -29,24 +29,36 @@ export function ClientWrapper({ initialSearch }: ClientWrapperProps) {
   }, []);
 
   return (
-    <header className="bg-primary text-primary-foreground py-3">
-      <div className="container mx-auto px-2">
-        <div className="flex flex-col sm:flex-row items-center gap-2">
-          <div className="flex items-center gap-2 w-full sm:w-auto">
-            <ThemeToggle />
-            <ModeToggle mode={mode} onModeChange={handleModeChange} />
-          </div>
-          <div className="w-full">
-            <SearchInput 
-              ref={searchInputRef}
-              initialSearch={initialSearch} 
-              mode={mode} 
-              onResponseReceived={setResponse}
-            />
+    <div className="flex flex-col h-full">
+      <header className="bg-primary text-primary-foreground py-3">
+        <div className="container mx-auto px-2">
+          <div className="flex flex-col sm:flex-row items-center gap-2">
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+              <ThemeToggle />
+              <ModeToggle mode={mode} onModeChange={handleModeChange} />
+            </div>
+            <div className="w-full">
+              <SearchInput 
+                ref={searchInputRef}
+                initialSearch={initialSearch} 
+                mode={mode} 
+                onResponseReceived={setResponse}
+              />
+            </div>
           </div>
         </div>
-        {response && <ResponseDisplay content={response} />}
+      </header>
+      <div className="container mx-auto px-3 flex-1 flex flex-col h-[calc(100%-3.5rem)] pb-3">
+        {response ? (
+          <div className="h-full flex-1">
+            <ResponseDisplay content={response} />
+          </div>
+        ) : (
+          <div className="flex-1 flex items-center justify-center text-muted-foreground">
+            <p>Enter a prompt above to get started</p>
+          </div>
+        )}
       </div>
-    </header>
+    </div>
   );
 } 

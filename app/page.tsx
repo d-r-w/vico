@@ -5,6 +5,12 @@ import { ClientWrapper } from "@/app/components/client-wrapper";
 import { Footer } from "@/app/components/footer";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { VICO_API_URL } from "@/app/api/config";
+import { 
+  ResizablePanelGroup,
+  ResizablePanel,
+  ResizableHandle 
+} from "@/components/ui/resizable";
+
 export default async function Home({
   searchParams
 }: {
@@ -14,17 +20,22 @@ export default async function Home({
 
   return (
     <div className="h-screen flex flex-col bg-background font-mono">
-      <ScrollArea className="flex-1">
-        <div className="min-h-full">
+      <ResizablePanelGroup direction="vertical" className="flex-1">
+        <ResizablePanel defaultSize={40} minSize={25}>
           <ClientWrapper initialSearch={search} />
-          <main className="container mx-auto px-2 py-4 flex justify-center items-center">
-            <Suspense fallback={<p className="text-xl text-center">Loading memories...</p>}>
-              <MemoryList search={search} />
-            </Suspense>
-          </main>
-        </div>
-        <Footer />
-      </ScrollArea>
+        </ResizablePanel>
+        <ResizableHandle withHandle />
+        <ResizablePanel defaultSize={60}>
+          <ScrollArea className="h-full">
+            <main className="container mx-auto px-2 py-4">
+              <Suspense fallback={<p className="text-xl text-center">Loading memories...</p>}>
+                <MemoryList search={search} />
+              </Suspense>
+            </main>
+            <Footer />
+          </ScrollArea>
+        </ResizablePanel>
+      </ResizablePanelGroup>
     </div>
   );
 }
