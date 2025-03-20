@@ -296,6 +296,45 @@ async def edit_memory(request: Request):
     cache_manager.invalidate_memory_caches()
     return {"success": True}
 
+def summarize_text(text_data):
+    model_name = "mlx-community/Qwen2.5-14B-Instruct-1M-bf16"
+    model, tokenizer = model_registry.get_lm_model(model_name)
+    
+    cache_key = f"{model_name.split('/')[-1]}_summarize_cache"
+    prompt_cache = cache_manager.get_cache(cache_key, model)
+    
+    # Create a prompt for summarization
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant that summarizes text content concisely while preserving the key information."},
+        {"role": "user", "content": f"Please summarize the following text from a web search:\n\n{text_data}. Please cite your sources using the supplied page numbers."}
+    ]
+    
+    prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
+    
+    response = lm_generate_streaming(model, tokenizer, prompt, max_tokens=10000, prompt_cache=prompt_cache)
+    
+    response_text = ""
+    for response_part in response:
+        response_text += response_part.text
+        yield response_part.text
+    
+    cache_manager.save_cache(cache_key)
+    cache_manager.mark_initialized(cache_key)
+
+@app.post("/api/summarize_text/")
+async def api_summarize_text(request: Request):
+    data = await request.json()
+    text_data = data.get('text_data')
+    
+    if not text_data:
+        return {"success": False, "error": "text_data is required"}, 400
+    
+    def token_generator():
+        for token in summarize_text(text_data):
+            yield token
+    
+    return StreamingResponse(token_generator(), media_type="text/plain")
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=3020)
