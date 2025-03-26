@@ -1,5 +1,3 @@
-
-import shlex
 import subprocess
 import re
 import json
@@ -59,9 +57,12 @@ def get_tool_call_results(response_text, logger, memory_storage_service, cache_m
                         
                     try:
                         logger.info(f"Executing terminal command: {command}")
-                        escaped_command = shlex.quote(command)
-                        logger.info(f"Executing terminal command: {escaped_command}")
-                        subprocess.Popen(["/bin/bash", "-c", command])
+                        # Don't escape the command as it prevents proper execution with arguments
+                        # But validate it's a proper command first
+                        if command.strip() and not command.strip()[0].isdigit():
+                            subprocess.Popen(["/bin/bash", "-c", command])
+                        else:
+                            logger.error(f"Invalid command format: {command}")
                     except Exception as e:
                         logger.error(f"Error executing command: {e}")
                         
