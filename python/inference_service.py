@@ -2,7 +2,8 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Query
 from fastapi.responses import StreamingResponse
-from mlx_vlm import load as vlm_load, apply_chat_template as vlm_apply_chat_template, generate as vlm_generate
+from huggingface_hub import hf_hub_download
+from mlx_vlm import load as vlm_load, apply_chat_template as vlm_apply_chat_template, generate as vlm_generate, stream_generate as vlm_stream_generate
 from mlx_lm import load as lm_load, stream_generate as lm_generate_streaming
 from mlx_lm.models.cache import load_prompt_cache, make_prompt_cache, save_prompt_cache
 from PIL import Image, ImageOps
@@ -15,10 +16,10 @@ import os
 from pathlib import Path
 import logging
 from pydantic import BaseModel, model_validator
-from typing import Optional, Dict, Any, Tuple, Set
+from typing import Optional, Dict, Any, Tuple, Set, List
 import prompt_templates
-from tools.tool_definitions import get_tool_definitions
 from tools.tool_executor import get_tool_call_results
+from tools.tool_definitions import get_tool_definitions
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -109,7 +110,7 @@ class CacheManager:
             cache_path = self._cache_dir / f"{cache_key}.safetensors"
             try:
                 logger.info(f"Saving prompt cache to disk: {cache_path}")
-                save_prompt_cache(str(cache_path), self._prompt_caches[cache_key])
+                #save_prompt_cache(str(cache_path), self._prompt_caches[cache_key])
                 self._initialized_caches.add(cache_key)
                 return True
             except Exception as e:
@@ -156,19 +157,37 @@ cache_manager = CacheManager()
 def get_current_date():
     return datetime.today().strftime('%Y-%m-%d')
 
-def describe_image(image, memory_text = None):
-    model_info = model_registry.get_vlm_model("mlx-community/Qwen2.5-VL-72B-Instruct-4bit")
-    
+def describe_image(image, memory_text = None): 
+    model_info = model_registry.get_vlm_model("mlx-community/gemma-3-27b-it-8bit")
     messages = prompt_templates.get_image_description_template(memory_text)
     
     prompt = vlm_apply_chat_template(model_info.processor, model_info.config, messages)
-    return vlm_generate(model_info.model, model_info.processor, prompt, image, verbose=True, max_tokens=10000, temperature=0.7)
+    return vlm_generate(model_info.model, model_info.processor, prompt, image, verbose=True, max_tokens=100000, temperature=0.7)
+
+def stream_response_with_tool_call(messages, model, tokenizer, prompt, max_tokens=100000, prompt_cache=None, memory_storage_service=None, cache_manager=None):
+    response = lm_generate_streaming(model, tokenizer, prompt, max_tokens=max_tokens, prompt_cache=prompt_cache)
+    response_text = ""
+    for response_part in response:
+        response_text += response_part.text
+        yield response_part.text
+    
+    if "<tool_call>" in response_text:
+        logger.info("Tool call detected")
+        [tool_name, tool_result] = get_tool_call_results(response_text, logger, memory_storage_service, cache_manager)
+        tool_call_results = f"<tool_call_results>\n{tool_result}\n</tool_call_results>"
+        
+        messages.append({"role": "assistant", "content": response_text})
+        messages.append({"role": "tool", "name": tool_name, "content": tool_call_results})
+        
+        prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
+        
+        yield from stream_response_with_tool_call(messages, model, tokenizer, prompt, max_tokens=max_tokens, prompt_cache=prompt_cache, memory_storage_service=memory_storage_service, cache_manager=cache_manager)
 
 def infer_with_context(context, query, is_deep = False):
-    # mlx-community/QwQ-32B-8bit
-    model_name = "mlx-community/Qwen2.5-14B-Instruct-1M-bf16" if not is_deep else "mlx-community/QwQ-32B-8bit" # Testing
-    # model_name = "mlx-community/Qwen2.5-14B-Instruct-1M-bf16" if not is_deep else "mlx-community/TinyR1-32B-Preview-8bit" # Works well
-    # model_name = "mlx-community/Qwen2.5-14B-Instruct-1M-bf16" if not is_deep else "mlx-community/DeepSeek-R1-Distill-Qwen-14B"
+    model_name = "mlx-community/Qwen2.5-14B-Instruct-1M-8bit" if not is_deep else "lmstudio-community/Qwen3-30B-A3B-MLX-8bit"
+
+    # "unsloth/Qwen3-32B-128K-GGUF" # lmstudio-community/Qwen3-32B-MLX-8bit
+    
     model, tokenizer = model_registry.get_lm_model(model_name)
     
     cache_key = f"{model_name.split('/')[-1]}_memory_cache"
@@ -178,28 +197,18 @@ def infer_with_context(context, query, is_deep = False):
             
     if cache_manager.is_initialized(cache_key):
         logger.info(f"Using cached prompt, appending new query")
-        messages.append(prompt_templates.get_memory_user_query_message(query, is_deep))
+        messages.extend(prompt_templates.get_vico_chat_template(context, query, is_deep))
         
     else:
         logger.info(f"Building full prompt with context for {cache_key}")
-        messages = prompt_templates.get_memory_chat_template(context, query, is_deep)
+        messages = prompt_templates.get_vico_chat_template(context, query, is_deep)
         
     tools = get_tool_definitions()
     prompt = tokenizer.apply_chat_template(messages, tools, add_generation_prompt=True, tokenize=False) # TODO Doesn't this mean that the tools are being added twice? (once when cached, once again always)
     
-    response = lm_generate_streaming(model, tokenizer, prompt, max_tokens=100000, prompt_cache=prompt_cache)
-    response_text = ""
-    
-    for response_part in response:
-        response_text += response_part.text
-        yield response_part.text
-        
-    if "<tool_call>" in response_text:
-        logger.info("Tool call detected")
-        tool_call_results = get_tool_call_results(response_text, logger, memory_storage_service, cache_manager)
-        logger.info(f"Tool call results: {tool_call_results}") # TODO Use results for inference
+    for token in stream_response_with_tool_call(messages, model, tokenizer, prompt, max_tokens=100000, prompt_cache=prompt_cache, memory_storage_service=memory_storage_service, cache_manager=cache_manager):
+        yield token
 
-    cache_manager.save_cache(cache_key) # TODO Does this need to happen for every call? Why?
     cache_manager.mark_initialized(cache_key)
 
 def _process_image_memory(base64_string, memory_text = None):
@@ -222,9 +231,8 @@ def get_recent_memories(limit: int = Query(5, description="Number of memories to
     return {"memories": memories}
 
 @app.get("/api/search_memories/")
-def search_memories(search: str = Query(..., description="Search query")):
+def search_memories(search: List[str] = Query(..., description="Search query")):
     memories = memory_storage_service.search_memories(search)
-    
     return {"memories": memories}
 
 def _get_memories_xml():
@@ -273,7 +281,6 @@ async def save_memory(request: SaveMemoryRequest):
         cache_manager.invalidate_memory_caches()
         return {"success": True}
     
-
 class DeleteMemoryRequest(BaseModel):
     memory_id: int
 
@@ -297,29 +304,32 @@ async def edit_memory(request: Request):
     return {"success": True}
 
 def summarize_text(text_data):
-    model_name = "mlx-community/Qwen2.5-14B-Instruct-1M-bf16"
-    model, tokenizer = model_registry.get_lm_model(model_name)
+    # model_name = "mlx-community/QwQ-32B-8bit" # Works very well but is slow
     
-    cache_key = f"{model_name.split('/')[-1]}_summarize_cache"
-    prompt_cache = cache_manager.get_cache(cache_key, model)
+    # model, tokenizer = model_registry.get_vlm_model(model_name)
     
-    # Create a prompt for summarization
-    messages = [
-        {"role": "system", "content": "You are a helpful assistant that summarizes text content concisely while preserving the key information."},
-        {"role": "user", "content": f"Please summarize the following text from a web search:\n\n{text_data}. Please cite your sources using the supplied page numbers."}
-    ]
+    # messages = [
+    #     {"role": "system", "content": "You are a helpful assistant that formats unformatted content while preserving the original content."},
+    #     {"role": "user", "content": f"Please format the following text from a web search:\n\n{text_data}."}
+    # ]
     
-    prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
+    # prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
     
-    response = lm_generate_streaming(model, tokenizer, prompt, max_tokens=10000, prompt_cache=prompt_cache)
+    # response = lm_generate_streaming(model, tokenizer, prompt, max_tokens=10000)
+    
+    model_info = model_registry.get_vlm_model("mlx-community/gemma-3-27b-it-8bit")
+    
+    prompt = vlm_apply_chat_template(model_info.processor, model_info.config, prompt_templates.get_summarize_x_posts_template(text_data))
+    # response = vlm_generate(model_info.model, model_info.processor, prompt, max_tokens=10000)
+    
+    # response = lm_generate_streaming(model_info.model, model_info.processor, prompt, max_tokens=10000)
+    
+    response = vlm_stream_generate(model_info.model, model_info.processor, prompt, max_tokens=100000)
     
     response_text = ""
     for response_part in response:
         response_text += response_part.text
         yield response_part.text
-    
-    cache_manager.save_cache(cache_key)
-    cache_manager.mark_initialized(cache_key)
 
 @app.post("/api/summarize_text/")
 async def api_summarize_text(request: Request):

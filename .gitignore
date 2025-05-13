@@ -34,7 +34,12 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-data
 
 # python
 *.pyc
+data/wiki/extracted_json
+data/wiki/enwiki-20250501-pages-articles-multistream-index.txt.bz2
+data/wiki/enwiki-20250501-pages-articles-multistream.xml.bz2
+data/wiki/wiki.db
+data/memories.duckdb
+wikipedia_en_all_nopic_2024-06.zim

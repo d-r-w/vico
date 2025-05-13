@@ -64,7 +64,6 @@ def save_memory(memory, media = None):
     """, (memory, media))
     
 def delete_memory(memory_id):
-    print("deleting")
     _execute_query("""
         DELETE FROM memories WHERE id = ?;
     """, (memory_id,))
@@ -76,11 +75,27 @@ def get_recent_memories(n):
     
     return process_memory_rows(rows)
 
-def search_memories(search):
-    rows = _execute_query("""
-        SELECT * FROM memories WHERE LOWER(memory) LIKE CONCAT('%', LOWER(?), '%') ORDER BY created_at DESC LIMIT 50;
-    """, (search,), fetch=True)
+def search_memories(search_terms):
+    if isinstance(search_terms, str):
+        search_terms = [search_terms]
+    elif not isinstance(search_terms, (list, tuple)):
+        raise ValueError("search_terms must be a string or a list/tuple of strings")
 
+    where_clauses = []
+    params = []
+    for term in search_terms:
+        where_clauses.append("LOWER(memory) LIKE CONCAT('%', LOWER(?), '%')")
+        params.append(term)
+    where_sql = " OR ".join(where_clauses)
+
+    query = f"""
+        SELECT * FROM memories
+        WHERE {where_sql}
+        ORDER BY created_at DESC
+        LIMIT 50;
+    """
+
+    rows = _execute_query(query, tuple(params), fetch=True)
     return process_memory_rows(rows)
     
 def get_all_memories():
