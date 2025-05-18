@@ -2,7 +2,6 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Query
 from fastapi.responses import StreamingResponse
-from huggingface_hub import hf_hub_download
 from mlx_vlm import load as vlm_load, apply_chat_template as vlm_apply_chat_template, generate as vlm_generate, stream_generate as vlm_stream_generate
 from mlx_lm import load as lm_load, stream_generate as lm_generate_streaming
 from mlx_lm.models.cache import load_prompt_cache, make_prompt_cache, save_prompt_cache
