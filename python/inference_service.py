@@ -1,9 +1,10 @@
 from __future__ import annotations
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, Query
+from fastapi import FastAPI, Request, Query, HTTPException
 from fastapi.responses import StreamingResponse
 from mlx_vlm import load as vlm_load, apply_chat_template as vlm_apply_chat_template, generate as vlm_generate, stream_generate as vlm_stream_generate
 from mlx_lm import load as lm_load, stream_generate as lm_generate_streaming
+from mlx_lm.sample_utils import make_sampler, make_logits_processors
 from mlx_lm.models.cache import load_prompt_cache, make_prompt_cache, save_prompt_cache
 from PIL import Image, ImageOps
 import io
@@ -12,6 +13,7 @@ from datetime import datetime
 import memory_storage_service
 import threading
 import os
+import subprocess
 from pathlib import Path
 import logging
 from pydantic import BaseModel, model_validator
@@ -164,26 +166,39 @@ def describe_image(image, memory_text = None):
     return vlm_generate(model_info.model, model_info.processor, prompt, image, verbose=True, max_tokens=100000, temperature=0.7)
 
 def stream_response_with_tool_call(messages, model, tokenizer, prompt, max_tokens=100000, prompt_cache=None, memory_storage_service=None, cache_manager=None):
-    response = lm_generate_streaming(model, tokenizer, prompt, max_tokens=max_tokens, prompt_cache=prompt_cache)
+    sampler = make_sampler(
+        temp=0.6,
+        top_p=0.95,
+        top_k=20,
+        min_p=0
+    )
+    logits = make_logits_processors(                          # optional penalties
+        repetition_penalty=1.05,
+        repetition_context_size=64
+    )
+    response = lm_generate_streaming(model, tokenizer, prompt, max_tokens=max_tokens, prompt_cache=prompt_cache, sampler=sampler, max_kv_size=100_000, logits_processors=logits) # TODO configs are 'agent'/model-specific
     response_text = ""
     for response_part in response:
         response_text += response_part.text
         yield response_part.text
     
-    if "<tool_call>" in response_text:
-        logger.info("Tool call detected")
-        [tool_name, tool_result] = get_tool_call_results(response_text, logger, memory_storage_service, cache_manager)
-        tool_call_results = f"<tool_call_results>\n{tool_result}\n</tool_call_results>"
+    if "</tool_call>" in response_text:
+        if "<tool_call>" not in response_text:
+            messages.append({"role": "tool", "name": "error", "content": "Tool call syntax error: opening <tool_call> tag not found. Prepend <tool_call> and try again."})
+            logger.warning(f"Tool call detected but no <tool_call> tag found: {response_text}")
+        else:
+            logger.info(f"Tool call detected: {response_text}")
+            [tool_name, tool_result] = get_tool_call_results(response_text, logger, memory_storage_service, cache_manager)
+            tool_call_results = f"<tool_call_results>\n{tool_result}\n</tool_call_results>"
+            messages.append({"role": "tool", "name": tool_name, "content": tool_call_results})
         
-        messages.append({"role": "assistant", "content": response_text})
-        messages.append({"role": "tool", "name": tool_name, "content": tool_call_results})
-        
+        # Common path for both successful and failed tool calls
         prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
-        
         yield from stream_response_with_tool_call(messages, model, tokenizer, prompt, max_tokens=max_tokens, prompt_cache=prompt_cache, memory_storage_service=memory_storage_service, cache_manager=cache_manager)
 
 def infer_with_context(context, query, is_deep = False):
-    model_name = "mlx-community/Qwen2.5-14B-Instruct-1M-8bit" if not is_deep else "lmstudio-community/Qwen3-30B-A3B-MLX-8bit"
+    model_name = "mlx-community/Qwen2.5-14B-Instruct-1M-8bit" if not is_deep else "/Users/whired/.cache/lm-studio/models/lmstudio-community/GLM-4.5-Air-MLX-4bit" #"lmstudio-community/Qwen3-30B-A3B-MLX-8bit"
+    # model_name = "lmstudio-community/Qwen3-30B-A3B-Instruct-2507-MLX-8bit"
 
     # "unsloth/Qwen3-32B-128K-GGUF" # lmstudio-community/Qwen3-32B-MLX-8bit
     
@@ -344,6 +359,58 @@ async def api_summarize_text(request: Request):
     
     return StreamingResponse(token_generator(), media_type="text/plain")
 
+class TTSRequest(BaseModel):
+    text: str
+
+@app.post("/api/tts/")
+async def tts(request: TTSRequest):
+    if not request.text:
+        raise HTTPException(status_code=400, detail="text is required")
+    
+    try:
+        logger.info(f"Generating TTS for text: {request.text[:100]}...")
+        
+        # Command as specified by the user
+        command = [
+            "uv", "run", "--with", "moshi-mlx", 
+            "/Users/whired/Desktop/splintered/tts-service/scripts/tts_mlx.py", 
+            "-", "-", "--quantize", "8"
+        ]
+        
+        # Run the command with the text as stdin
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=False  # Handle binary data
+        )
+        
+        # Send text as input and get the audio output
+        audio_data, error = process.communicate(input=request.text.encode('utf-8'))
+        
+        if process.returncode != 0:
+            logger.error(f"TTS command failed with return code {process.returncode}: {error.decode()}")
+            raise HTTPException(status_code=500, detail=f"TTS generation failed: {error.decode()}")
+        
+        logger.info(f"TTS generation completed successfully, audio size: {len(audio_data)} bytes")
+        
+        # Return the audio data as a streaming response
+        return StreamingResponse(
+            io.BytesIO(audio_data), 
+            media_type="audio/wav",
+            headers={
+                "Content-Disposition": "attachment; filename=tts_output.wav"
+            }
+        )
+        
+    except subprocess.TimeoutExpired:
+        logger.error("TTS generation timed out")
+        raise HTTPException(status_code=504, detail="TTS generation timed out")
+    except Exception as e:
+        logger.error(f"TTS generation error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"TTS generation failed: {str(e)}")
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=3020)
+    uvicorn.run(app, host="0.0.0.0", port=3020, timeout_keep_alive=600)

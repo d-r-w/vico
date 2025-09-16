@@ -23,6 +23,61 @@ class _OfflineWikipediaService:
                 merged.append((start, end))
         return merged
 
+    def remove_consecutive_short_lines(self, text: str, max_line_length: int = 100, min_consecutive: int = 3) -> str:
+        """
+        Remove consecutive blocks of short lines that are likely noise.
+        
+        Args:
+            text: The input text to clean
+            max_line_length: Maximum length of a line to be considered "short"
+            min_consecutive: Minimum number of consecutive short lines to trigger removal
+            
+        Returns:
+            Cleaned text with consecutive short line blocks removed
+        """
+        lines = text.split('\n')
+        if len(lines) < min_consecutive:
+            return text
+            
+        # Track which lines to keep
+        keep_lines = [True] * len(lines)
+        
+        # Find consecutive blocks of short lines
+        i = 0
+        while i < len(lines):
+            # Check if current line is short
+            if len(lines[i].strip()) < max_line_length:
+                # Count consecutive short lines
+                consecutive_count = 0
+                j = i
+                while j < len(lines) and len(lines[j].strip()) < max_line_length:
+                    consecutive_count += 1
+                    j += 1
+                
+                # If we have enough consecutive short lines, mark them for removal
+                if consecutive_count >= min_consecutive:
+                    for k in range(i, j):
+                        keep_lines[k] = False
+                    i = j
+                else:
+                    i += 1
+            else:
+                i += 1
+        
+        # Filter out the lines marked for removal
+        filtered_lines = [line for line, keep in zip(lines, keep_lines) if keep]
+        
+        # Clean up multiple consecutive empty lines
+        result_lines = []
+        prev_empty = False
+        for line in filtered_lines:
+            is_empty = len(line.strip()) == 0
+            if not (is_empty and prev_empty):  # Skip if both current and previous are empty
+                result_lines.append(line)
+            prev_empty = is_empty
+        
+        return '\n'.join(result_lines)
+
     def extract_contexts(self, text: str, term: str, ctx: int = 50) -> List[str]:
         lower_text = text.lower()
         spans: List[Tuple[int, int]] = [(0, min(len(text), 400))]
@@ -72,25 +127,27 @@ class _OfflineWikipediaService:
             cur.close()
 
             for title, text, score in rows:
+                # Clean the text by removing consecutive short lines
+                cleaned_text = self.remove_consecutive_short_lines(text)
+                
                 topic_id = base64.b64encode(title.encode()).decode()
                 if topic_id in seen:
                     continue
                 seen.add(topic_id)
 
-                contexts = self.extract_contexts(text, term, ctx=50)
+                contexts = self.extract_contexts(cleaned_text, term, ctx=50)
                 if not contexts:
-                    print(f"No contexts found for term: {term}")
-                    continue
-
-                best_context = contexts[0]
-                for snippet in contexts[1:]:
-                    best_context = best_context.rstrip(" …")
-                    snippet = snippet.lstrip("… ")
-                    best_context = f"{best_context} … {snippet}"
-                    
-                if len(best_context) > 5500:
-                    print(f"Truncating context for {title} from {len(best_context)} to 5500")
-                    best_context = best_context[:5500].rstrip() + " …"
+                    best_context = cleaned_text
+                else:
+                    best_context = contexts[0]
+                    for snippet in contexts[1:]:
+                        best_context = best_context.rstrip(" …")
+                        snippet = snippet.lstrip("… ")
+                        best_context = f"{best_context} … {snippet}"
+                        
+                if len(best_context) > 800:
+                    print(f"Truncating context for {title} from {len(best_context)} to 800")
+                    best_context = best_context[:800].rstrip() + " …"
 
                 all_results.append({
                     "content": (
@@ -126,7 +183,9 @@ class _OfflineWikipediaService:
                 results.append(f"Article not found for title: {title}")
                 continue
 
-            results.append(article[0])
+            # Clean the article text by removing consecutive short lines
+            cleaned_article = self.remove_consecutive_short_lines(article[0])
+            results.append(cleaned_article)
         
         return "\n\n---\n\n".join(results)
     

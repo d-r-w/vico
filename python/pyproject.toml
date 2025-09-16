@@ -7,7 +7,7 @@ dependencies = [
     "fastapi",
     "huggingface-hub",
     "mlx-vlm",
-    "mlx-lm",
+    "mlx-lm>=0.26.2",
     "pillow",
     "pydantic",
     "duckdb"

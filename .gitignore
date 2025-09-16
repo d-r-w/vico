@@ -38,8 +38,8 @@ next-env.d.ts
 # python
 *.pyc
 data/wiki/extracted_json
-data/wiki/enwiki-20250501-pages-articles-multistream-index.txt.bz2
-data/wiki/enwiki-20250501-pages-articles-multistream.xml.bz2
 data/wiki/wiki.db
 data/memories.duckdb
+data/memories.duckdb.wal
 wikipedia_en_all_nopic_2024-06.zim
+data/wiki/*.bz2
