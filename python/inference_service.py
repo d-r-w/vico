@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 load_dotenv()
 from pydantic import BaseModel, model_validator
 import json
-from typing import Optional, Dict, Any, Tuple, Set, List, Callable, cast, Iterable
+from typing import Optional, Dict, Any, Tuple, Set, List, Callable, cast, Iterable, Union, NamedTuple
 import prompt_templates
 from tools.tool_executor import get_tool_call_results
 from tools.tool_definitions import get_tool_definitions
@@ -242,88 +242,6 @@ def _append_tool_result(messages: List[Dict[str, Any]], tool_name: str, tool_res
     messages.append({"role": "tool", "name": tool_name, "content": f"<tool_call_results>\n{tool_result}\n</tool_call_results>"})
 
 
-def _run_generation_loop(
-    model: Any,
-    tokenizer: Any,
-    prompt_cache: Any,
-    messages: List[Dict[str, Any]],
-    prompt: str,
-    max_tokens: int,
-    max_kv_size: int,
-    sampler: Any,
-    logits: Any,
-    tools: List[Dict[str, Any]],
-    model_name: str,
-    tool_name: str = "",
-    on_token: Optional[Callable[[str], None]] = None,
-    on_tool_call_start: Optional[Callable[[str, Dict[str, Any]], None]] = None,
-    on_tool_call_end: Optional[Callable[[str, Any], None]] = None,
-    return_final_text: bool = True
-) -> str:
-    """Unified generation loop that handles streaming and tool calls.
-
-    Args:
-        return_final_text: If True, returns final concatenated text. If False, yields tokens.
-    """
-    final_text_parts: List[str] = []
-
-    while True:
-        response = lm_generate_streaming(
-            model, tokenizer, prompt, max_tokens=max_tokens, prompt_cache=prompt_cache,
-            sampler=sampler, max_kv_size=max_kv_size, logits_processors=logits
-        )
-
-        response_text = ""
-        for part in response:
-            if part.text:
-                response_text += part.text
-                try:
-                    if on_token is not None:
-                        on_token(part.text)
-                except Exception as e:
-                    logger.warning(f"[{tool_name}] token streaming error: {e}")
-
-        response_text = _inject_think_tag_if_missing(response_text, model_name)
-        clean_text = _strip_think_blocks(response_text)
-
-        if "</tool_call>" in clean_text:
-            if "<tool_call>" not in clean_text:
-                _append_tool_result(messages, "error", "Tool call syntax error: opening <tool_call> tag not found.")
-                logger.warning(f"[{tool_name}] Tool call detected but no <tool_call> tag found")
-            else:
-                logger.info(f"[{tool_name}] Tool call detected")
-                t_name, t_args = _parse_tool_call(clean_text)
-
-                if not t_name:
-                    _append_tool_result(messages, "error", "Tool call parsing failed.")
-                else:
-                    # Notify tool-call start
-                    try:
-                        if on_tool_call_start is not None:
-                            on_tool_call_start(t_name, t_args)
-                    except Exception as e:
-                        logger.warning(f"[{tool_name}] on_tool_call_start callback error: {e}")
-
-                    _, tool_result = get_tool_call_results(clean_text, logger, memory_storage_service, cache_manager)
-                    _append_tool_result(messages, t_name, tool_result)
-
-                    # Notify tool-call end
-                    try:
-                        if on_tool_call_end is not None:
-                            on_tool_call_end(t_name, tool_result)
-                    except Exception as e:
-                        logger.warning(f"[{tool_name}] on_tool_call_end callback error: {e}")
-
-            _log_messages_summary(f"{tool_name}after_tool", messages)
-            prompt = tokenizer.apply_chat_template(messages, tools, add_generation_prompt=True, tokenize=False)
-            continue
-        else:
-            final_text_parts.append(response_text)
-            break
-
-    return "".join(final_text_parts).strip()
-
-
 def _run_streaming_generation_loop(
     model: Any,
     tokenizer: Any,
@@ -340,6 +258,8 @@ def _run_streaming_generation_loop(
     on_token: Optional[Callable[[str], None]] = None,
     on_tool_call_start: Optional[Callable[[str, Dict[str, Any]], None]] = None,
     on_tool_call_end: Optional[Callable[[str, Any], None]] = None,
+    tool_call_handler: Optional[ToolCallHandler] = None,
+    on_final_response_text: Optional[Callable[[str], None]] = None,
 ) -> Iterable[str]:
     """Streaming version of generation loop that yields SSE events."""
     while True:
@@ -363,7 +283,7 @@ def _run_streaming_generation_loop(
 
         # Stream tokens with thinking injection
         yield from _sse_stream_with_thinking(
-            _token_generator(),
+            _iter_stream_tokens(_token_generator()),
             plain_event="assistant_token",
             think_event="thinking_token",
             think_complete_event="thinking_complete",
@@ -382,86 +302,220 @@ def _run_streaming_generation_loop(
             else:
                 logger.info(f"[{tool_name}] Tool call detected")
                 t_name, t_args = _parse_tool_call(clean_text)
-
-                # Yield tool call start event
-                try:
-                    yield _make_sse("assistant_tool_call_start", {"tool_name": t_name, "input": t_args})
-                except Exception:
-                    pass
-
-                # Run sub-agent
-                token_queue: "queue.Queue[str]" = queue.Queue()
-                agent_result_holder: List[str] = []
-
-                def on_subagent_token(text: str) -> None:
+                if not t_name:
+                    _append_tool_result(messages, "error", "Tool call parsing failed.")
+                else:
                     try:
-                        token_queue.put(text)
+                        if on_tool_call_start is not None:
+                            on_tool_call_start(t_name, t_args)
                     except Exception as e:
-                        logger.warning(f"[{tool_name}] subagent token enqueue error: {e}")
+                        logger.warning(f"[{tool_name}] on_tool_call_start callback error: {e}")
 
-                event_queue: "queue.Queue[Tuple[str, Dict[str, Any]]]" = queue.Queue()
-
-                def on_subagent_tool_start(name: str, args: Dict[str, Any]) -> None:
                     try:
-                        event_queue.put(("subagent_tool_call_start", {"tool_name": name, "input": args}))
-                    except Exception as e:
-                        logger.warning(f"[{tool_name}] subagent tool start enqueue error: {e}")
+                        yield _make_sse("assistant_tool_call_start", {"tool_name": t_name, "input": t_args})
+                    except Exception:
+                        pass
 
-                def on_subagent_tool_end(name: str, output: Any) -> None:
+                    handler: ToolCallHandler = tool_call_handler or _build_agent_tool_call_handler(
+                        parent_label=tool_name,
+                        model_name=model_name,
+                        model=model,
+                        tokenizer=tokenizer,
+                    )
+
                     try:
-                        event_queue.put(("subagent_tool_call_end", {"tool_name": name, "output": output}))
+                        outcome = handler(t_name, t_args, clean_text)
                     except Exception as e:
-                        logger.warning(f"[{tool_name}] subagent tool end enqueue error: {e}")
+                        logger.error(f"[{tool_name}] Tool call handler error: {e}")
+                        outcome = ToolCallOutcome(stream=None, result_supplier=lambda: "")
 
-                def run_agent_and_store_result():
+                    stream_iter = outcome.stream
+                    if stream_iter is not None:
+                        for event in stream_iter:
+                            yield event
+
+                    tool_result = outcome.result_supplier()
+                    _log_returned_message(f"{tool_name}agent_result", t_name, tool_result)
+                    _append_tool_result(messages, t_name, tool_result)
+
                     try:
-                        result = _run_agent(
-                            t_name,
-                            t_args,
-                            "",  # user_query - not used in sub-agent
-                            model_name,
-                            model,
-                            tokenizer,
-                            on_token=on_subagent_token,
-                            on_tool_call_start=on_subagent_tool_start,
-                            on_tool_call_end=on_subagent_tool_end,
-                        )
-                        agent_result_holder.append(result)
+                        if on_tool_call_end is not None:
+                            on_tool_call_end(t_name, tool_result)
                     except Exception as e:
-                        logger.error(f"[{tool_name}] Agent thread error: {e}")
-                        agent_result_holder.append("")
+                        logger.warning(f"[{tool_name}] on_tool_call_end callback error: {e}")
 
-                agent_thread = threading.Thread(target=run_agent_and_store_result)
-                agent_thread.start()
-
-                # Stream subagent tokens while agent runs
-                yield from _sse_stream_with_thinking_from_queues(
-                    token_queue,
-                    event_queue,
-                    is_alive_fn=lambda: agent_thread.is_alive(),
-                    plain_event="subagent_token",
-                    think_event="subagent_thinking_token",
-                    think_complete_event="subagent_thinking_complete",
-                    extra_payload={"tool_name": t_name},
-                    inject_think_if_missing=("Qwen3-Next-80B-A3B-Thinking" in model_name),
-                )
-
-                agent_thread.join()
-                agent_result = agent_result_holder[0] if agent_result_holder else ""
-                _log_returned_message(f"{tool_name}agent_result", t_name, agent_result)
-                _append_tool_result(messages, t_name, agent_result)
-
-                # Yield tool call end event
-                try:
-                    yield _make_sse("assistant_tool_call_end", {"tool_name": t_name, "output": agent_result})
-                except Exception:
-                    pass
+                    try:
+                        yield _make_sse("assistant_tool_call_end", {"tool_name": t_name, "output": tool_result})
+                    except Exception:
+                        pass
 
             _log_messages_summary(f"{tool_name}after_tool", messages)
             prompt = tokenizer.apply_chat_template(messages, tools, add_generation_prompt=True, tokenize=False)
             continue
         else:
+            if on_final_response_text is not None:
+                try:
+                    on_final_response_text(response_text)
+                except Exception as e:
+                    logger.warning(f"[{tool_name}] on_final_response_text callback error: {e}")
             break
+
+
+def _build_agent_tool_call_handler(
+    *,
+    parent_label: str,
+    model_name: str,
+    model: Any,
+    tokenizer: Any,
+) -> ToolCallHandler:
+    def handler(tool_call_name: str, tool_args: Dict[str, Any], _clean_text: str) -> ToolCallOutcome:
+        token_queue: "queue.Queue[str]" = queue.Queue()
+        event_queue: "queue.Queue[Tuple[str, Dict[str, Any]]]" = queue.Queue()
+        agent_result_holder: List[str] = []
+
+        def on_subagent_token(text: str) -> None:
+            try:
+                token_queue.put(text)
+            except Exception as e:
+                logger.warning(f"[{parent_label}] subagent token enqueue error: {e}")
+
+        def on_subagent_tool_start(name: str, args: Dict[str, Any]) -> None:
+            try:
+                event_queue.put(("subagent_tool_call_start", {"tool_name": name, "input": args}))
+            except Exception as e:
+                logger.warning(f"[{parent_label}] subagent tool start enqueue error: {e}")
+
+        def on_subagent_tool_end(name: str, output: Any) -> None:
+            try:
+                event_queue.put(("subagent_tool_call_end", {"tool_name": name, "output": output}))
+            except Exception as e:
+                logger.warning(f"[{parent_label}] subagent tool end enqueue error: {e}")
+
+        def run_agent_and_store_result() -> None:
+            try:
+                result = _run_agent(
+                    tool_call_name,
+                    tool_args,
+                    "",
+                    model_name,
+                    model,
+                    tokenizer,
+                    on_token=on_subagent_token,
+                    on_tool_call_start=on_subagent_tool_start,
+                    on_tool_call_end=on_subagent_tool_end,
+                )
+                agent_result_holder.append(result)
+            except Exception as e:
+                logger.error(f"[{parent_label}] Agent thread error: {e}")
+                agent_result_holder.append("")
+
+        agent_thread = threading.Thread(target=run_agent_and_store_result)
+        agent_thread.start()
+
+        def stream_generator() -> Iterable[str]:
+            yield from _sse_stream_with_thinking(
+                _iter_stream_from_queues(
+                    token_queue,
+                    event_queue,
+                    is_alive_fn=lambda: agent_thread.is_alive(),
+                ),
+                plain_event="subagent_token",
+                think_event="subagent_thinking_token",
+                think_complete_event="subagent_thinking_complete",
+                extra_payload={"tool_name": tool_call_name},
+                inject_think_if_missing=("Qwen3-Next-80B-A3B-Thinking" in model_name),
+            )
+
+        def stream_with_join() -> Iterable[str]:
+            try:
+                yield from stream_generator()
+            finally:
+                agent_thread.join()
+
+        def result_supplier() -> str:
+            agent_thread.join()
+            return agent_result_holder[0] if agent_result_holder else ""
+
+        return ToolCallOutcome(stream=stream_with_join(), result_supplier=result_supplier)
+
+    return handler
+
+
+def _build_direct_tool_call_handler() -> ToolCallHandler:
+    def handler(_tool_call_name: str, _tool_args: Dict[str, Any], clean_text: str) -> ToolCallOutcome:
+        def result_supplier() -> str:
+            try:
+                _, tool_result = get_tool_call_results(clean_text, logger, memory_storage_service, cache_manager)
+                return tool_result
+            except Exception as e:
+                logger.error(f"Direct tool call execution failed: {e}")
+                return ""
+
+        return ToolCallOutcome(stream=None, result_supplier=result_supplier)
+
+    return handler
+
+
+def _collect_blocking_response(
+    *,
+    model: Any,
+    tokenizer: Any,
+    prompt_cache: Any,
+    messages: List[Dict[str, Any]],
+    prompt: str,
+    max_tokens: int,
+    max_kv_size: int,
+    sampler: Any,
+    logits: Any,
+    tools: List[Dict[str, Any]],
+    model_name: str,
+    tool_name: str,
+    on_token: Optional[Callable[[str], None]] = None,
+    on_tool_call_start: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+    on_tool_call_end: Optional[Callable[[str, Any], None]] = None,
+) -> str:
+    final_text_parts: List[str] = []
+
+    def capture_final_text(text: str) -> None:
+        final_text_parts.append(text)
+
+    def forward_on_token(text: str) -> None:
+        if on_token is not None:
+            on_token(text)
+
+    def forward_tool_start(name: str, args: Dict[str, Any]) -> None:
+        if on_tool_call_start is not None:
+            on_tool_call_start(name, args)
+
+    def forward_tool_end(name: str, output: Any) -> None:
+        if on_tool_call_end is not None:
+            on_tool_call_end(name, output)
+
+    handler = _build_direct_tool_call_handler()
+
+    for _ in _run_streaming_generation_loop(
+        model=model,
+        tokenizer=tokenizer,
+        prompt_cache=prompt_cache,
+        messages=messages,
+        prompt=prompt,
+        max_tokens=max_tokens,
+        max_kv_size=max_kv_size,
+        sampler=sampler,
+        logits=logits,
+        tools=tools,
+        model_name=model_name,
+        tool_name=tool_name,
+        on_token=forward_on_token,
+        on_tool_call_start=forward_tool_start,
+        on_tool_call_end=forward_tool_end,
+        tool_call_handler=handler,
+        on_final_response_text=capture_final_text,
+    ):
+        # Exhaust the streaming iterator to drive generation to completion
+        pass
+
+    return "".join(final_text_parts).strip()
 
 
 def _log_messages_summary(context_name: str, messages: List[Dict[str, Any]], max_items: int = 6) -> None:
@@ -646,7 +700,7 @@ def _run_agent(
     max_kv_size = int(os.getenv("AGENTIC_MAX_KV_SIZE", "256000"))
     logger.info(f"[Agent:{tool_name}] generate: max_tokens={max_tokens}, max_kv_size={max_kv_size}")
 
-    result = _run_generation_loop(
+    result = _collect_blocking_response(
         model=model,
         tokenizer=tokenizer,
         prompt_cache=prompt_cache,
@@ -662,7 +716,6 @@ def _run_agent(
         on_token=on_token,
         on_tool_call_start=on_tool_call_start,
         on_tool_call_end=on_tool_call_end,
-        return_final_text=True
     )
 
     # Do not persist/initialize agent caches; release to control memory
@@ -692,8 +745,87 @@ def _make_sse(event_type: str, payload: Dict[str, Any] | None = None) -> str:
         return f"data: {json.dumps({'type': 'error', 'message': f'encoding failure: {e}'})}\n\n"
 
 
+THINK_OPEN_TAG = "<think>"
+THINK_CLOSE_TAG = "</think>"
+
+
+class StreamToken(NamedTuple):
+    text: str
+
+
+class StreamEvent(NamedTuple):
+    event_type: str
+    payload: Dict[str, Any]
+
+
+StreamItem = Union[StreamToken, StreamEvent]
+
+
+class ToolCallOutcome(NamedTuple):
+    stream: Optional[Iterable[str]]
+    result_supplier: Callable[[], str]
+
+
+ToolCallHandler = Callable[[str, Dict[str, Any], str], ToolCallOutcome]
+
+
+def _trailing_prefix_length(text: str, tag: str) -> int:
+    """Length of the longest suffix of text that could still grow into tag."""
+    if not text:
+        return 0
+    max_candidate = min(len(text), len(tag) - 1)
+    for length in range(max_candidate, 0, -1):
+        if tag.startswith(text[-length:]):
+            return length
+    return 0
+
+
+def _safe_length(text: str, tag: str) -> int:
+    return len(text) - _trailing_prefix_length(text, tag)
+
+
+def _iter_stream_tokens(chunks: Iterable[str]) -> Iterable[StreamItem]:
+    for chunk in chunks:
+        if chunk:
+            yield StreamToken(chunk)
+
+
+def _iter_stream_from_queues(
+    token_queue: "queue.Queue[str]",
+    event_queue: "queue.Queue[Tuple[str, Dict[str, Any]]]",
+    is_alive_fn: Callable[[], bool],
+) -> Iterable[StreamItem]:
+    while is_alive_fn() or not token_queue.empty() or not event_queue.empty():
+        while not event_queue.empty():
+            try:
+                ev_type, payload = event_queue.get_nowait()
+            except queue.Empty:
+                break
+            except Exception:
+                break
+            else:
+                yield StreamEvent(ev_type, payload)
+
+        try:
+            tok = token_queue.get(timeout=0.1)
+        except queue.Empty:
+            continue
+        except Exception:
+            continue
+
+        if tok:
+            yield StreamToken(tok)
+
+    while not event_queue.empty():
+        try:
+            ev_type, payload = event_queue.get_nowait()
+            yield StreamEvent(ev_type, payload)
+        except Exception:
+            break
+
+
 def _sse_stream_with_thinking(
-    chunks: Iterable[str],
+    stream: Iterable[StreamItem],
     *,
     plain_event: str,
     think_event: str,
@@ -701,13 +833,17 @@ def _sse_stream_with_thinking(
     extra_payload: Optional[Dict[str, Any]] = None,
     inject_think_if_missing: bool = False,
 ) -> Iterable[str]:
-    """Yield SSE strings from a stream of text chunks, respecting <think> blocks.
+    """Yield SSE strings from a stream of token chunks and inline events.
 
+    - Emits StreamEvent items immediately via _make_sse
     - Emits plain_event for normal tokens with payload {"token": ...} (+ extra_payload)
     - Emits think_event and think_complete_event for thinking tokens/close (+ extra_payload)
     - If inject_think_if_missing is True and no <think> tag appears early, treat the
       initial content as within a <think>...</think> block until a closing tag is seen.
     """
+    think_open = THINK_OPEN_TAG
+    think_close = THINK_CLOSE_TAG
+
     buffer = ""
     pending: str = ""
     emission_started = False
@@ -721,26 +857,34 @@ def _sse_stream_with_thinking(
             base.update(extra_payload)
         return base
 
-    for raw_chunk in chunks:
+    for item in stream:
+        if isinstance(item, StreamEvent):
+            yield _make_sse(item.event_type, item.payload)
+            continue
+        raw_chunk = item.text
         if not raw_chunk:
             continue
         pending += raw_chunk
 
         # Decide how to start emitting: explicit <think> vs injected think vs plain
         if not emission_started:
-            opening_index = pending.find("<think>")
+            opening_index = pending.find(think_open)
             if opening_index != -1:
                 pre_think = pending[:opening_index]
                 if pre_think:
                     yield _make_sse(plain_event, make_payload(pre_think))
-                pending = pending[opening_index + len("<think>"):]
-                emission_started = True
-                in_think_block = True
-            elif inject_think_if_missing and len(pending) > len("<think>"):
+                pending = pending[opening_index + len(think_open):]
                 emission_started = True
                 in_think_block = True
             else:
-                # Not enough info yet; hold until we can decide
+                if think_open.startswith(pending):
+                    continue
+                if inject_think_if_missing:
+                    emission_started = True
+                    in_think_block = True
+                else:
+                    emission_started = True
+            if not emission_started:
                 continue
 
         # From here, we have started emitting. Process pending into the main buffer
@@ -749,17 +893,17 @@ def _sse_stream_with_thinking(
 
         while True:
             if in_think_block:
-                closing_index = buffer.find("</think>")
+                closing_index = buffer.find(think_close)
                 if closing_index != -1:
                     think_content = buffer[:closing_index]
                     if think_content:
                         yield _make_sse(think_event, make_payload(think_content))
                     yield _make_sse(think_complete_event, make_payload())
-                    buffer = buffer[closing_index + len("</think>"):]
+                    buffer = buffer[closing_index + len(think_close):]
                     in_think_block = False
                     continue
 
-                safe_len = max(0, len(buffer) - (len("</think>") - 1))
+                safe_len = _safe_length(buffer, think_close)
                 if safe_len:
                     think_delta = buffer[:safe_len]
                     if think_delta:
@@ -767,16 +911,16 @@ def _sse_stream_with_thinking(
                     buffer = buffer[safe_len:]
                 break
             else:
-                opening_index = buffer.find("<think>")
+                opening_index = buffer.find(think_open)
                 if opening_index != -1:
                     pre_think = buffer[:opening_index]
                     if pre_think:
                         yield _make_sse(plain_event, make_payload(pre_think))
-                    buffer = buffer[opening_index + len("<think>"):]
+                    buffer = buffer[opening_index + len(think_open):]
                     in_think_block = True
                     continue
 
-                safe_len = max(0, len(buffer) - (len("<think>") - 1))
+                safe_len = _safe_length(buffer, think_open)
                 if safe_len:
                     assistant_delta = buffer[:safe_len]
                     if assistant_delta:
@@ -794,136 +938,6 @@ def _sse_stream_with_thinking(
                 yield _make_sse(plain_event, make_payload(buffer))
     else:
         # Never started emitting; treat any residual as plain text
-        if pending:
-            yield _make_sse(plain_event, make_payload(pending))
-
-
-def _sse_stream_with_thinking_from_queues(
-    token_queue: "queue.Queue[str]",
-    event_queue: "queue.Queue[Tuple[str, Dict[str, Any]]]",
-    is_alive_fn: Callable[[], bool],
-    *,
-    plain_event: str,
-    think_event: str,
-    think_complete_event: str,
-    extra_payload: Optional[Dict[str, Any]] = None,
-    inject_think_if_missing: bool = False,
-) -> Iterable[str]:
-    """Interleave subagent tokens and subagent tool-call events.
-
-    - Emits tool-call SSEs from event_queue immediately as they arrive
-    - Streams token text from token_queue with <think> handling identical to _sse_stream_with_thinking
-    """
-    buffer = ""
-    pending: str = ""
-    emission_started = False
-    in_think_block = False
-
-    def make_payload(token_text: Optional[str] = None) -> Dict[str, Any]:
-        base: Dict[str, Any] = {}
-        if token_text is not None:
-            base["token"] = token_text
-        if extra_payload:
-            base.update(extra_payload)
-        return base
-
-    while is_alive_fn() or not token_queue.empty() or not event_queue.empty():
-        # Drain any pending subagent tool-call events
-        while not event_queue.empty():
-            try:
-                ev_type, payload = event_queue.get_nowait()
-            except Exception:
-                break
-            else:
-                yield _make_sse(ev_type, payload)
-
-        # Pull a token chunk if available
-        try:
-            tok = token_queue.get(timeout=0.1)
-        except queue.Empty:
-            continue
-        except Exception:
-            continue
-
-        if not tok:
-            continue
-        pending += tok
-
-        # Decide how to start emitting: explicit <think> vs injected think vs plain
-        if not emission_started:
-            opening_index = pending.find("<think>")
-            if opening_index != -1:
-                pre_think = pending[:opening_index]
-                if pre_think:
-                    yield _make_sse(plain_event, make_payload(pre_think))
-                pending = pending[opening_index + len("<think>") :]
-                emission_started = True
-                in_think_block = True
-            elif inject_think_if_missing and len(pending) > len("<think>"):
-                emission_started = True
-                in_think_block = True
-            else:
-                # Not enough info yet; hold until we can decide
-                continue
-
-        # From here, we have started emitting. Process pending into the main buffer
-        buffer += pending
-        pending = ""
-
-        while True:
-            if in_think_block:
-                closing_index = buffer.find("</think>")
-                if closing_index != -1:
-                    think_content = buffer[:closing_index]
-                    if think_content:
-                        yield _make_sse(think_event, make_payload(think_content))
-                    yield _make_sse(think_complete_event, make_payload())
-                    buffer = buffer[closing_index + len("</think>") :]
-                    in_think_block = False
-                    continue
-
-                safe_len = max(0, len(buffer) - (len("</think>") - 1))
-                if safe_len:
-                    think_delta = buffer[:safe_len]
-                    if think_delta:
-                        yield _make_sse(think_event, make_payload(think_delta))
-                    buffer = buffer[safe_len:]
-                break
-            else:
-                opening_index = buffer.find("<think>")
-                if opening_index != -1:
-                    pre_think = buffer[:opening_index]
-                    if pre_think:
-                        yield _make_sse(plain_event, make_payload(pre_think))
-                    buffer = buffer[opening_index + len("<think>") :]
-                    in_think_block = True
-                    continue
-
-                safe_len = max(0, len(buffer) - (len("<think>") - 1))
-                if safe_len:
-                    assistant_delta = buffer[:safe_len]
-                    if assistant_delta:
-                        yield _make_sse(plain_event, make_payload(assistant_delta))
-                    buffer = buffer[safe_len:]
-                break
-
-    # Flush any remaining tool-call events
-    while not event_queue.empty():
-        try:
-            ev_type, payload = event_queue.get_nowait()
-            yield _make_sse(ev_type, payload)
-        except Exception:
-            break
-
-    # Flush any remaining buffered tokens
-    if emission_started:
-        if buffer:
-            if in_think_block:
-                yield _make_sse(think_event, make_payload(buffer))
-                yield _make_sse(think_complete_event, make_payload())
-            else:
-                yield _make_sse(plain_event, make_payload(buffer))
-    else:
         if pending:
             yield _make_sse(plain_event, make_payload(pending))
 
@@ -979,7 +993,11 @@ def _stream_response(query: str, is_agent: bool = False):
             yield token
         # Signal end of stream
         yield _make_sse("end")
-    return StreamingResponse(token_generator(), media_type="text/plain")
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+    }
+    return StreamingResponse(token_generator(), media_type="text/event-stream", headers=headers)
 
 
 @app.get("/api/recent_memories/")
