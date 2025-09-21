@@ -39,7 +39,9 @@ next-env.d.ts
 *.pyc
 data/wiki/extracted_json
 data/wiki/wiki.db
-data/memories.duckdb
-data/memories.duckdb.wal
-wikipedia_en_all_nopic_2024-06.zim
+data/memories.duckdb*
+wikipedia_*.zim
 data/wiki/*.bz2
+data/prompt_caches
+python/.env
+AGENTS.md

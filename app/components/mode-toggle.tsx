@@ -40,17 +40,17 @@ export function ModeToggle({ mode, onModeChange }: ModeToggleProps) {
         Chat
       </Button>
       <Button
-        variant={mode === MODES.DEEP ? "default" : "ghost"}
+        variant={mode === MODES.AGENT ? "default" : "ghost"}
         size="sm"
-        onClick={() => onModeChange(MODES.DEEP)}
+        onClick={() => onModeChange(MODES.AGENT)}
         className={`${
-          mode === MODES.DEEP 
+          mode === MODES.AGENT 
             ? "bg-secondary text-secondary-foreground hover:bg-secondary/90" 
             : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
         }`}
       >
         <Telescope className="h-4 w-4 mr-2" />
-        Deep
+        Agent
       </Button>
     </div>
   );

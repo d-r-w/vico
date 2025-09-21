@@ -1,82 +1,77 @@
 # Vico - Vision Memory Copilot
 
-<div align="center">
+Vico couples a streaming Next.js client with a local MLX inference stack to capture, search, and reason over personal memories. The web UI surfaces recent entries, conversational context, and autonomous tool activity while the Python backend orchestrates large language, vision, and retrieval models entirely on-device.
 
-[![Bun](https://img.shields.io/badge/Bun-000000?style=for-the-badge&logo=bun)](https://bun.sh/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![Next.js](https://img.shields.io/badge/Next.js%2014-black?style=for-the-badge&logo=next.js)](https://nextjs.org/)
-[![DuckDB](https://img.shields.io/badge/Duckdb-000000?style=for-the-badge&logo=Duckdb&logoColor=yellow)](https://duckdb.org/)
-[![MLX](https://img.shields.io/badge/MLX-F80000?style=for-the-badge&logo=Apple&logoColor=white)](https://github.com/ml-explore/mlx)
+## Feature Highlights
+- **Memory-centric workspace** - resizable panels combine assistant output with a searchable grid of DuckDB-stored memories (text + optional image).
+- **Search, Chat, Agent modes** - instant text filtering, conversational Q&A, or multi-step agentic reasoning with live token and tool-call telemetry.
+- **Tool calling** - the FastAPI service exposes functions for editing memories, running terminal commands, and querying an offline Wikipedia snapshot.
+- **Streaming UX** - Server-Sent Events drive typing indicators, thinking blocks, and final responses without blocking the UI.
+- **Local-first data** - memories persist in `data/memories.duckdb`, prompt caches live under `data/prompt_caches/`, and large corpora remain on disk.
 
-</div>
+## Architecture Overview
+### Web Client (Bun + Next.js 14)
+- App Router UI in `app/` with shadcn/ui primitives from `components/ui/` and shared helpers in `lib/`.
+- `ClientWrapper` coordinates SSE updates, the timeline of assistant/subagent thoughts, and tool call state.
+- Route handlers under `app/api/` proxy memory CRUD and chat/agent requests to the inference service via `INFERENCE_API_URL`.
 
-## Overview
+### Inference & Tools (Python + FastAPI)
+- `python/inference_service.py` loads MLX chat (`CHAT_MODEL_*`) and VLM (`IMAGE_*`) models, manages prompt caches, and streams tokens.
+- Memory utilities live in `python/memory_storage_service.py` (DuckDB) and research helpers in `python/offline_wikipedia_service.py`.
+- Function-calling tools are registered in `python/tools/`, including memory editing, offline research, and shell execution helpers.
 
-Vico is an advanced memory management system that combines cutting-edge visual processing with sophisticated text analysis. Built with modern web technologies and optimized for Apple Silicon, it offers an intuitive interface for storing, managing, and searching through digital memories.
+### Data Assets
+- `data/memories.duckdb` - primary memory store (binary blobs encode images as base64).
+- `data/prompt_caches/` - persisted ML prompt caches created by the inference service.
+- `data/wiki/wiki.db` - full-text index consumed by the offline Wikipedia tool; regenerate with `data/wiki/update_wiki.sh` using the bundled `wikipedia_en_all_nopic_2024-06.zim` snapshot.
 
-## Key Features
-
-### Visual Processing
-- **Intelligent Image Analysis**: Automated detailed image descriptions using MLX-powered vision models
-- **Visual Memory Storage**: Efficient image processing and storage with base64 encoding
-- **Multi-Modal Search**: Combined text and visual content search capabilities
-
-### Memory Management
-- **Real-time Operations**: Instant memory creation, editing, and deletion
-- **Advanced Search**: Natural language processing for intuitive memory retrieval
-- **Context-Aware Responses**: AI-powered memory analysis and correlation
-
-## Architecture
-
-### Frontend
-- Next.js 14 App Router with TypeScript
-- React Server Components for optimal performance
-- Tailwind CSS + shadcn/ui for component styling
-- Client-side state management with React hooks
-
-### Backend
-- Python FastAPI service for ML operations
-- MLX for efficient model inference
-- DuckDB for fast, reliable data storage
-- CORS support for Chrome extension integration
-
-### ML Pipeline
-- Qwen2.5-VL-72B for image analysis
-- DeepSeek-R1-Distill-Qwen-14B for short-context memory reasoning
-- Qwen2.5-14B-Instruct-1M for long-context memory processing
-- Optimized inference using MLX on Apple Silicon
-
-## System Requirements
-
-- Apple Silicon Mac (M1/M2/M3)
-- Python 3.10+
-- Node.js 18+
-- Bun runtime
+## Prerequisites
+- Apple Silicon Mac (M1/M2/M3) running macOS 14+ for MLX acceleration.
+- [Bun](https://bun.sh/) ≥ 1.1 and Node.js 18+ (for tooling compatibility).
+- [uv](https://github.com/astral-sh/uv) ≥ 0.4 with Python 3.10+ on PATH.
 
 ## Quick Start
+1. **Install dependencies**
+   ```bash
+   bun install
+   (cd python && uv sync)
+   ```
+2. **Configure models** - copy or edit `python/.env` to configure local models (see below).
+3. **Run the inference API**
+   ```bash
+   cd python
+   uv run inference_service.py  # serves on http://localhost:3020/api/
+   ```
+4. **Start the web client** (separate terminal)
+   ```bash
+   bun run dev  # http://localhost:3000
+   ```
+5. Visit http://localhost:3000 and switch between Search, Chat, and Agent modes to verify streaming responses.
 
-1. **Install Dependencies**
+## Configuration Reference
+Sample `python/.env` model configuration:
 
 ```bash
-bun install
-pip install -r requirements.txt
+# Chat Model Configuration
+CHAT_MODEL_NAME=mlx-community/Qwen2.5-14B-Instruct-1M-8bit
+
+# Agentic Model Configuration
+AGENTIC_MODEL_NAME=mlx-community/Qwen3-Next-80B-A3B-Thinking-4bit
+AGENTIC_MAX_TOKENS=81920
+AGENTIC_MAX_KV_SIZE=256000
+AGENTIC_TEMP=0.6
+AGENTIC_TOP_P=0.95
+AGENTIC_TOP_K=20
+AGENTIC_MIN_P=0
+AGENTIC_REPETITION_PENALTY=1.05
+AGENTIC_REPETITION_CONTEXT_SIZE=64
+
+# Vision Model Configuration
+IMAGE_MODEL_NAME=mlx-community/gemma-3-27b-it-8bit
+IMAGE_MAX_TOKENS=100000
+IMAGE_TEMP=0.7
 ```
 
-2. **Run the Development Server**
-
-```bash
-bun run dev
-```
-
-3. **Run the Inference Service**
-
-```bash
-python python/inference_service.py
-```
-
-## Acknowledgments
-
-Built using [shadcn/ui](https://ui.shadcn.com/) and ML implementations from [mlx-vlm](https://github.com/Blaizzy/mlx-vlm) ❤️.
 
 ## Memory Backup
 ```bash
@@ -85,3 +80,10 @@ Built using [shadcn/ui](https://ui.shadcn.com/) and ML implementations from [mlx
 # Format: memories-YEAR_DAY_HOUR.duckdb (e.g., memories-2024_15_09.duckdb)
 0 9,21 * * * rsync -avz /path/to/vico/data/memories.duckdb backupserver:/path/to/backup/memories-$(date +\%Y_\%d_\%H).duckdb
 ```
+
+## Made Possible By (❤️):
+[![uv](https://img.shields.io/badge/uv-package%20manager-blue?logo=python&logoColor=white)](https://github.com/astral-sh/uv)
+[![Bun](https://img.shields.io/badge/Bun-runtime-black?logo=bun&logoColor=white)](https://github.com/oven-sh/bun)
+[![shadcn/ui](https://img.shields.io/badge/shadcn%2Fui-components-black?logo=react&logoColor=white)](https://ui.shadcn.com/)
+[![mlx-lm](https://img.shields.io/badge/mlx--lm-language%20models-orange?logo=apple&logoColor=white)](https://github.com/ml-explore/mlx-lm)
+[![mlx-vlm](https://img.shields.io/badge/mlx--vlm-vision%20models-orange?logo=apple&logoColor=white)](https://github.com/Blaizzy/mlx-vlm)

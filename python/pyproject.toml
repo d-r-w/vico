@@ -7,10 +7,11 @@ dependencies = [
     "fastapi",
     "huggingface-hub",
     "mlx-vlm",
-    "mlx-lm>=0.26.2",
     "pillow",
     "pydantic",
-    "duckdb"
+    "duckdb",
+    "mlx-lm>=0.28.0",
+    "python-dotenv",
 ]
 
 [build-system]

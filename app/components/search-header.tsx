@@ -11,13 +11,21 @@ interface SearchHeaderProps {
   mode: Mode;
   onModeChange: (mode: Mode) => void;
   onResponseReceived: (response: string) => void;
+  onThinkingTokenReceived?: (assistantName: string, token: string) => void;
+  onThinkingComplete?: (assistantName: string) => void;
+  onToolCallStart?: (toolName: string, input?: unknown) => void;
+  onToolCallEnd?: (toolName: string, output?: unknown) => void;
 }
 
 export function SearchHeader({ 
   initialSearch, 
   mode, 
   onModeChange, 
-  onResponseReceived 
+  onResponseReceived,
+  onThinkingTokenReceived,
+  onThinkingComplete,
+  onToolCallStart,
+  onToolCallEnd
 }: SearchHeaderProps) {
   const searchInputRef = useRef<SearchInputHandle>(null);
 
@@ -42,6 +50,10 @@ export function SearchHeader({
               initialSearch={initialSearch} 
               mode={mode} 
               onResponseReceived={onResponseReceived}
+              onThinkingTokenReceived={onThinkingTokenReceived}
+              onThinkingComplete={onThinkingComplete}
+              onToolCallStart={onToolCallStart}
+              onToolCallEnd={onToolCallEnd}
             />
           </div>
         </div>
