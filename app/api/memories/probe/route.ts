@@ -8,12 +8,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Query is required" }, { status: 400 });
     }
 
-    const url = new URL(
-      `${INFERENCE_API_URL}${
-        isAgent ? "agent_chat/" : "memories_agent_chat/"
-      }`
-    );
+    const url = new URL(`${INFERENCE_API_URL}chat/`);
     url.searchParams.set("query", query);
+    url.searchParams.set("is_agent", String(Boolean(isAgent)));
     const res = await fetch(url);
 
     if (!res.ok) {

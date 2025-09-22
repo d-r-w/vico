@@ -966,19 +966,17 @@ def _assistant_stream_with_agents(context_xml: str, query: str, is_agent: bool =
     cache_manager.mark_initialized(cache_key)
 
 
-def _stream_response(query: str, is_agent: bool = False):
-    memories_xml = _get_memories_xml()
+_STREAM_HEADERS = {
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+}
 
-    def token_generator():
-        for token in _assistant_stream_with_agents(memories_xml, query, is_agent=is_agent):
-            yield token
-        # Signal end of stream
-        yield _make_sse("end")
-    headers = {
-        "Cache-Control": "no-cache",
-        "Connection": "keep-alive",
-    }
-    return StreamingResponse(token_generator(), media_type="text/event-stream", headers=headers)
+
+def _chat_token_stream(query: str, *, is_agent: bool) -> Iterable[str]:
+    memories_xml = _get_memories_xml()
+    for token in _assistant_stream_with_agents(memories_xml, query, is_agent=is_agent):
+        yield token
+    yield _make_sse("end")
 
 
 @app.get("/api/recent_memories/")
@@ -992,14 +990,16 @@ def search_memories(search: List[str] = Query(..., description="Search query")):
     memories = memory_storage_service.search_memories(search)
     return {"memories": memories}
 
-@app.get("/api/memories_agent_chat/")
-def memories_agent_chat(query: str = Query(..., description="Chat query")):
-    return _stream_response(query)
-
-
-@app.get("/api/agent_chat/")
-async def agent_chat(query: str = Query(..., description="Probe query")):
-    return _stream_response(query, is_agent=True)
+@app.get("/api/chat/")
+async def chat(
+    query: str = Query(..., description="Chat query"),
+    is_agent: bool = Query(False, description="Use the agentic model for the response"),
+):
+    return StreamingResponse(
+        _chat_token_stream(query, is_agent=is_agent),
+        media_type="text/event-stream",
+        headers=_STREAM_HEADERS,
+    )
 
 
 class SaveMemoryRequest(BaseModel):
