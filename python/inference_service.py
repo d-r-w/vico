@@ -16,6 +16,7 @@ import queue
 import os
 from pathlib import Path
 import logging
+from concurrent.futures import Future
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -375,74 +376,20 @@ def _build_agent_tool_call_handler(
     tokenizer: Any,
 ) -> ToolCallHandler:
     def handler(tool_call_name: str, tool_args: Dict[str, Any], _clean_text: str) -> ToolCallOutcome:
-        token_queue: "queue.Queue[str]" = queue.Queue()
-        event_queue: "queue.Queue[Tuple[str, Dict[str, Any]]]" = queue.Queue()
-        agent_result_holder: List[str] = []
+        executor = SubAgentExecutor(
+            parent_label=parent_label,
+            tool_call_name=tool_call_name,
+            tool_args=tool_args,
+            model_name=model_name,
+            model=model,
+            tokenizer=tokenizer,
+        )
 
-        def on_subagent_token(text: str) -> None:
-            try:
-                token_queue.put(text)
-            except Exception as e:
-                logger.warning(f"[{parent_label}] subagent token enqueue error: {e}")
+        stream = executor.stream_sse(
+            inject_think_if_missing=("Qwen3-Next-80B-A3B-Thinking" in model_name),
+        )
 
-        def on_subagent_tool_start(name: str, args: Dict[str, Any]) -> None:
-            try:
-                event_queue.put(("subagent_tool_call_start", {"tool_name": name, "input": args}))
-            except Exception as e:
-                logger.warning(f"[{parent_label}] subagent tool start enqueue error: {e}")
-
-        def on_subagent_tool_end(name: str, output: Any) -> None:
-            try:
-                event_queue.put(("subagent_tool_call_end", {"tool_name": name, "output": output}))
-            except Exception as e:
-                logger.warning(f"[{parent_label}] subagent tool end enqueue error: {e}")
-
-        def run_agent_and_store_result() -> None:
-            try:
-                result = _run_agent(
-                    tool_call_name,
-                    tool_args,
-                    "",
-                    model_name,
-                    model,
-                    tokenizer,
-                    on_token=on_subagent_token,
-                    on_tool_call_start=on_subagent_tool_start,
-                    on_tool_call_end=on_subagent_tool_end,
-                )
-                agent_result_holder.append(result)
-            except Exception as e:
-                logger.error(f"[{parent_label}] Agent thread error: {e}")
-                agent_result_holder.append("")
-
-        agent_thread = threading.Thread(target=run_agent_and_store_result)
-        agent_thread.start()
-
-        def stream_generator() -> Iterable[str]:
-            yield from _sse_stream_with_thinking(
-                _iter_stream_from_queues(
-                    token_queue,
-                    event_queue,
-                    is_alive_fn=lambda: agent_thread.is_alive(),
-                ),
-                plain_event="subagent_token",
-                think_event="subagent_thinking_token",
-                think_complete_event="subagent_thinking_complete",
-                extra_payload={"tool_name": tool_call_name},
-                inject_think_if_missing=("Qwen3-Next-80B-A3B-Thinking" in model_name),
-            )
-
-        def stream_with_join() -> Iterable[str]:
-            try:
-                yield from stream_generator()
-            finally:
-                agent_thread.join()
-
-        def result_supplier() -> str:
-            agent_thread.join()
-            return agent_result_holder[0] if agent_result_holder else ""
-
-        return ToolCallOutcome(stream=stream_with_join(), result_supplier=result_supplier)
+        return ToolCallOutcome(stream=stream, result_supplier=executor.result)
 
     return handler
 
@@ -755,40 +702,6 @@ def _iter_stream_tokens(chunks: Iterable[str]) -> Iterable[StreamItem]:
             yield StreamToken(chunk)
 
 
-def _iter_stream_from_queues(
-    token_queue: "queue.Queue[str]",
-    event_queue: "queue.Queue[Tuple[str, Dict[str, Any]]]",
-    is_alive_fn: Callable[[], bool],
-) -> Iterable[StreamItem]:
-    while is_alive_fn() or not token_queue.empty() or not event_queue.empty():
-        while not event_queue.empty():
-            try:
-                ev_type, payload = event_queue.get_nowait()
-            except queue.Empty:
-                break
-            except Exception:
-                break
-            else:
-                yield StreamEvent(ev_type, payload)
-
-        try:
-            tok = token_queue.get(timeout=0.1)
-        except queue.Empty:
-            continue
-        except Exception:
-            continue
-
-        if tok:
-            yield StreamToken(tok)
-
-    while not event_queue.empty():
-        try:
-            ev_type, payload = event_queue.get_nowait()
-            yield StreamEvent(ev_type, payload)
-        except Exception:
-            break
-
-
 def _sse_stream_with_thinking(
     stream: Iterable[StreamItem],
     *,
@@ -905,6 +818,109 @@ def _sse_stream_with_thinking(
         # Never started emitting; treat any residual as plain text
         if pending:
             yield _make_sse(plain_event, make_payload(pending))
+
+
+class SubAgentExecutor:
+    def __init__(
+        self,
+        *,
+        parent_label: str,
+        tool_call_name: str,
+        tool_args: Dict[str, Any],
+        model_name: str,
+        model: Any,
+        tokenizer: Any,
+    ) -> None:
+        self._parent_label = parent_label
+        self._tool_call_name = tool_call_name
+        self._tool_args = tool_args
+        self._model_name = model_name
+        self._model = model
+        self._tokenizer = tokenizer
+        self._queue: "queue.Queue[Optional[StreamItem]]" = queue.Queue()
+        self._result_future: Future[str] = Future()
+        self._thread = threading.Thread(
+            target=self._run,
+            name=f"SubAgent-{tool_call_name}",
+        )
+        self._thread.start()
+
+    def _emit_item(self, item: Optional[StreamItem]) -> None:
+        try:
+            self._queue.put(item)
+        except Exception as exc:
+            logger.warning(f"[{self._parent_label}] subagent queue enqueue error: {exc}")
+
+    def _run(self) -> None:
+        def on_token(text: str) -> None:
+            if not text:
+                return
+            self._emit_item(StreamToken(text))
+
+        def on_tool_start(name: str, args: Dict[str, Any]) -> None:
+            self._emit_item(StreamEvent("subagent_tool_call_start", {"tool_name": name, "input": args}))
+
+        def on_tool_end(name: str, output: Any) -> None:
+            self._emit_item(StreamEvent("subagent_tool_call_end", {"tool_name": name, "output": output}))
+
+        try:
+            result = _run_agent(
+                self._tool_call_name,
+                self._tool_args,
+                "",
+                self._model_name,
+                self._model,
+                self._tokenizer,
+                on_token=on_token,
+                on_tool_call_start=on_tool_start,
+                on_tool_call_end=on_tool_end,
+            )
+            if not self._result_future.done():
+                self._result_future.set_result(result)
+        except Exception as exc:
+            logger.error(f"[{self._parent_label}] Agent thread error: {exc}")
+            if not self._result_future.done():
+                self._result_future.set_result("")
+        finally:
+            self._emit_item(None)
+
+    def _stream_items(self) -> Iterable[StreamItem]:
+        while True:
+            try:
+                item = self._queue.get()
+            except Exception as exc:
+                logger.warning(f"[{self._parent_label}] subagent queue retrieval error: {exc}")
+                continue
+            if item is None:
+                break
+            yield item
+
+    def stream_sse(
+        self,
+        *,
+        inject_think_if_missing: bool,
+    ) -> Iterable[str]:
+        def generator() -> Iterable[str]:
+            try:
+                yield from _sse_stream_with_thinking(
+                    self._stream_items(),
+                    plain_event="subagent_token",
+                    think_event="subagent_thinking_token",
+                    think_complete_event="subagent_thinking_complete",
+                    extra_payload={"tool_name": self._tool_call_name},
+                    inject_think_if_missing=inject_think_if_missing,
+                )
+            finally:
+                self._thread.join()
+
+        return generator()
+
+    def result(self) -> str:
+        self._thread.join()
+        try:
+            return self._result_future.result()
+        except Exception:
+            return ""
 
 
 def _assistant_stream_with_agents(context_xml: str, query: str, is_agent: bool = True):
