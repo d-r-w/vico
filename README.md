@@ -9,21 +9,10 @@ Vico couples a streaming Next.js client with a local MLX inference stack to capt
 - **Streaming UX** - Server-Sent Events drive typing indicators, thinking blocks, and final responses without blocking the UI.
 - **Local-first data** - memories persist in `data/memories.duckdb`, prompt caches live under `data/prompt_caches/`, and large corpora remain on disk.
 
-## Architecture Overview
-### Web Client (Bun + Next.js 14)
-- App Router UI in `app/` with shadcn/ui primitives from `components/ui/` and shared helpers in `lib/`.
-- `ClientWrapper` coordinates SSE updates, the timeline of assistant/subagent thoughts, and tool call state.
-- Route handlers under `app/api/` proxy memory CRUD and chat/agent requests to the inference service via `INFERENCE_API_URL`.
-
-### Inference & Tools (Python + FastAPI)
-- `python/inference_service.py` loads MLX chat (`CHAT_MODEL_*`) and VLM (`IMAGE_*`) models, manages prompt caches, and streams tokens.
-- Memory utilities live in `python/memory_storage_service.py` (DuckDB) and research helpers in `python/offline_wikipedia_service.py`.
-- Function-calling tools are registered in `python/tools/`, including memory editing, offline research, and shell execution helpers.
-
 ### Data Assets
 - `data/memories.duckdb` - primary memory store (binary blobs encode images as base64).
 - `data/prompt_caches/` - persisted ML prompt caches created by the inference service.
-- `data/wiki/wiki.db` - full-text index consumed by the offline Wikipedia tool; regenerate with `data/wiki/update_wiki.sh` using the bundled `wikipedia_en_all_nopic_2024-06.zim` snapshot.
+- `data/wiki/wiki.db` - full-text index consumed by the offline Wikipedia tool; regenerate with `data/wiki/update_wiki.sh`
 
 ## Prerequisites
 - Apple Silicon Mac (M1/M2/M3) running macOS 14+ for MLX acceleration.
