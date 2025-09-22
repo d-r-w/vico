@@ -268,18 +268,19 @@ def _run_streaming_generation_loop(
             sampler=sampler, max_kv_size=max_kv_size, logits_processors=logits
         )
 
-        response_text = ""
+        response_buffer = io.StringIO()
+
         def _token_generator() -> Iterable[str]:
-            nonlocal response_text
             for part in response:
                 if part.text:
-                    response_text += part.text
+                    chunk_text = part.text
+                    response_buffer.write(chunk_text)
                     try:
                         if on_token is not None:
-                            on_token(part.text)
+                            on_token(chunk_text)
                     except Exception as e:
                         logger.warning(f"[{tool_name}] token streaming error: {e}")
-                    yield part.text
+                    yield chunk_text
 
         # Stream tokens with thinking injection
         yield from _sse_stream_with_thinking(
@@ -292,11 +293,13 @@ def _run_streaming_generation_loop(
         )
 
         # Keep response_text consistent with SSE injection behavior for parsing
+        response_text = response_buffer.getvalue()
         response_text = _inject_think_tag_if_missing(response_text, model_name)
         clean_text = _strip_think_blocks(response_text)
+        tag_scan = _scan_tool_call_tags(clean_text)
 
-        if "</tool_call>" in clean_text:
-            if "<tool_call>" not in clean_text:
+        if tag_scan.has_close:
+            if not tag_scan.has_open:
                 _append_tool_result(messages, "error", "Tool call syntax error: opening <tool_call> tag not found.")
                 logger.warning(f"[{tool_name}] Tool call detected but no <tool_call> tag found")
             else:
@@ -568,6 +571,32 @@ def _extract_think_content(text: str) -> str:
         return "".join(matches)
     except Exception:
         return ""
+
+
+class ToolCallTagScan(NamedTuple):
+    has_open: bool
+    has_close: bool
+
+
+def _scan_tool_call_tags(text: str) -> ToolCallTagScan:
+    open_tag = "<tool_call>"
+    close_tag = "</tool_call>"
+    open_len = len(open_tag)
+
+    has_open = False
+    index = 0
+    limit = len(text)
+
+    while index < limit:
+        if not has_open and text.startswith(open_tag, index):
+            has_open = True
+            index += open_len
+            continue
+        if text.startswith(close_tag, index):
+            return ToolCallTagScan(has_open, True)
+        index += 1
+
+    return ToolCallTagScan(has_open, False)
 
 
 def _is_qwen3_thinking_model(model_name: str) -> bool:
