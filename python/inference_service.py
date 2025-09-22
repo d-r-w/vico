@@ -23,7 +23,7 @@ from pydantic import BaseModel, model_validator
 import json
 from typing import Optional, Dict, Any, Tuple, Set, List, Callable, cast, Iterable, Union, NamedTuple
 import prompt_templates
-from tools.tool_executor import get_tool_call_results, parse_tool_call
+from tools.tool_executor import get_tool_call_results, parse_tool_call, ToolCallParseError
 from tools.tool_definitions import get_tool_definitions
 
 logging.basicConfig(
@@ -301,10 +301,13 @@ def _run_streaming_generation_loop(
                 logger.warning(f"[{tool_name}] Tool call detected but no <tool_call> tag found")
             else:
                 logger.info(f"[{tool_name}] Tool call detected")
-                t_name, t_args = parse_tool_call(clean_text)
-                if not t_name:
-                    _append_tool_result(messages, "error", "Tool call parsing failed.")
+                try:
+                    tool_call = parse_tool_call(clean_text)
+                except ToolCallParseError as exc:
+                    logger.warning(f"[{tool_name}] Tool call parsing failed: {exc.message}")
+                    _append_tool_result(messages, "error", f"Tool call parsing failed: {exc.message}")
                 else:
+                    t_name, t_args = tool_call
                     try:
                         if on_tool_call_start is not None:
                             on_tool_call_start(t_name, t_args)

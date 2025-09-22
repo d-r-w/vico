@@ -2,7 +2,7 @@ import subprocess
 import re
 import json
 import logging
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, NamedTuple, Optional, Tuple
 
 from offline_wikipedia_service import offline_wikipedia_service
 from tools.tool_definitions import get_full_topic_details_tool_name, perform_research_tool_name
@@ -13,86 +13,168 @@ logger = logging.getLogger(__name__)
 MAX_TERMINAL_OUTPUT_LENGTH = 8000
 
 
-def parse_tool_call(response_text: str) -> Tuple[str, Dict[str, Any]]:
-    try:
-        section = response_text.split("<tool_call>")[1].split("</tool_call>")[0]
-    except Exception:
-        return "", {}
+class ToolCall(NamedTuple):
+    name: str
+    arguments: Dict[str, Any]
 
-    lines = [line for line in section.strip().split("\n")]
-    tool_name = lines[0].strip() if lines else ""
-    arguments: Dict[str, Any] = {}
 
-    try:
-        if tool_name.startswith("{") and tool_name.endswith("}"):
-            payload = json.loads(tool_name)
-            name = payload.get("name")
-            if isinstance(name, str):
-                tool_name = name
-            json_arguments = payload.get("arguments")
-            if isinstance(json_arguments, dict):
-                arguments.update(json_arguments)
-    except Exception:
-        pass
+class ToolCallParseError(Exception):
+    """Raised when a ``<tool_call>`` block cannot be parsed."""
 
-    i = 1
-    while i < len(lines):
-        line = lines[i].strip()
-        if line.startswith("<arg_key>") and line.endswith("</arg_key>"):
-            key = line[9:-10]
-            i += 1
-            if i < len(lines) and lines[i].strip().startswith("<arg_value>"):
-                current = lines[i].strip()
-                if current.endswith("</arg_value>"):
-                    value = current[11:-12]
-                else:
-                    value_lines = []
-                    first_line = current[11:]
-                    if first_line:
-                        value_lines.append(first_line)
-                    i += 1
-                    while i < len(lines):
-                        current = lines[i]
-                        if current.strip().endswith("</arg_value>"):
-                            last_line = current.rstrip()[:-12]
-                            if last_line:
-                                value_lines.append(last_line)
-                            break
-                        value_lines.append(current)
-                        i += 1
-                    value = "\n".join(value_lines)
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
 
-                trimmed = value.strip()
-                if (trimmed.startswith("[") and trimmed.endswith("]")) or (
-                    trimmed.startswith("{") and trimmed.endswith("}")
-                ):
-                    try:
-                        arguments[key] = json.loads(trimmed)
-                    except Exception:
-                        arguments[key] = value
-                else:
-                    arguments[key] = value
-                i += 1
-            else:
-                i += 1
-        else:
-            i += 1
+
+_TOOL_CALL_PATTERN = re.compile(r"<tool_call>(?P<body>.*?)</tool_call>", re.DOTALL)
+_ARGUMENT_PATTERN = re.compile(
+    r"<arg_key>(?P<key>.*?)</arg_key>[\s\r\n]*<arg_value>(?P<value>.*?)</arg_value>",
+    re.DOTALL,
+)
+
+
+def parse_tool_call(response_text: str) -> ToolCall:
+    if not isinstance(response_text, str):
+        raise ToolCallParseError("Response text must be a string")
+
+    if not response_text.strip():
+        raise ToolCallParseError("Response text is empty")
+
+    matches = list(_TOOL_CALL_PATTERN.finditer(response_text))
+    if not matches:
+        raise ToolCallParseError("Missing <tool_call> block")
+
+    if len(matches) > 1:
+        logger.debug("Multiple <tool_call> blocks detected; using the first occurrence")
+
+    body = matches[0].group("body").strip()
+    if not body:
+        raise ToolCallParseError("Empty <tool_call> block")
+
+    first_line = _first_non_empty_line(body)
+    if not first_line:
+        raise ToolCallParseError("Tool call block contains no content")
+
+    if _looks_like_json(first_line):
+        return _parse_json_tool_call(body)
+
+    tool_name = first_line.strip()
+    arguments = _parse_argument_pairs(body)
 
     if not arguments:
-        json_match = re.search(r"\{.*\}", section, re.DOTALL)
-        if json_match:
-            try:
-                payload = json.loads(json_match.group(0))
-                name = payload.get("name")
-                if isinstance(name, str):
-                    tool_name = name
-                json_arguments = payload.get("arguments")
-                if isinstance(json_arguments, dict):
-                    arguments = json_arguments
-            except Exception:
-                pass
+        arguments, inferred_name = _parse_embedded_arguments(body)
+        if inferred_name:
+            tool_name = inferred_name.strip()
 
-    return tool_name, arguments
+    if not tool_name:
+        raise ToolCallParseError("Tool name missing in <tool_call> block")
+
+    return ToolCall(tool_name, arguments)
+
+
+def _first_non_empty_line(text: str) -> str:
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return ""
+
+
+def _looks_like_json(value: str) -> bool:
+    if not value:
+        return False
+    starts = value[0]
+    ends = value[-1]
+    return (starts == "{" and ends == "}") or (starts == "[" and ends == "]")
+
+
+def _parse_json_tool_call(body: str) -> ToolCall:
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise ToolCallParseError(f"Invalid JSON tool call payload: {exc.msg}") from exc
+
+    if not isinstance(payload, dict):
+        raise ToolCallParseError("JSON tool call payload must be an object")
+
+    raw_name = payload.get("name")
+    if not isinstance(raw_name, str) or not raw_name.strip():
+        raise ToolCallParseError("JSON tool call payload missing 'name'")
+
+    raw_arguments = payload.get("arguments", {})
+    if raw_arguments is None:
+        arguments: Dict[str, Any] = {}
+    elif isinstance(raw_arguments, dict):
+        arguments = raw_arguments
+    else:
+        raise ToolCallParseError("JSON tool call 'arguments' must be an object")
+
+    return ToolCall(raw_name.strip(), dict(arguments))
+
+
+def _parse_argument_pairs(body: str) -> Dict[str, Any]:
+    arguments: Dict[str, Any] = {}
+
+    for match in _ARGUMENT_PATTERN.finditer(body):
+        key = match.group("key").strip()
+        if not key:
+            continue
+
+        raw_value = match.group("value")
+        if raw_value is None:
+            continue
+
+        arguments[key] = _coerce_argument_value(raw_value)
+
+    return arguments
+
+
+def _parse_embedded_arguments(body: str) -> Tuple[Dict[str, Any], Optional[str]]:
+    json_match = re.search(r"\{.*\}", body, re.DOTALL)
+    if not json_match:
+        return {}, None
+
+    candidate = json_match.group(0)
+    try:
+        payload = json.loads(candidate)
+    except json.JSONDecodeError:
+        return {}, None
+
+    if not isinstance(payload, dict):
+        return {}, None
+
+    nested_arguments = payload.get("arguments")
+    if isinstance(nested_arguments, dict):
+        return _drop_name_key(dict(nested_arguments)), _safe_extract_name(payload)
+
+    return _drop_name_key(dict(payload)), _safe_extract_name(payload)
+
+
+def _safe_extract_name(payload: Dict[str, Any]) -> Optional[str]:
+    name = payload.get("name")
+    if isinstance(name, str) and name.strip():
+        return name
+    return None
+
+
+def _drop_name_key(arguments: Dict[str, Any]) -> Dict[str, Any]:
+    if "name" in arguments:
+        arguments = {k: v for k, v in arguments.items() if k != "name"}
+    return arguments
+
+
+def _coerce_argument_value(raw_value: str) -> Any:
+    value = raw_value.strip()
+    if not value:
+        return ""
+
+    if _looks_like_json(value):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            logger.debug("Failed to parse argument value as JSON", exc_info=True)
+
+    return value
 
 def _truncate_terminal_output(text: str, max_length: int = MAX_TERMINAL_OUTPUT_LENGTH) -> str:
     """Truncate terminal output to prevent context overflow."""
@@ -118,11 +200,15 @@ def get_tool_call_results(response_text, passed_logger, memory_storage_service=N
     
     tool_name: str = "unknown"
     try:
-        parsed_name, arguments = parse_tool_call(response_text)
-        if not parsed_name:
-            raise ValueError("Tool name missing in <tool_call> block")
+        parsed_call = parse_tool_call(response_text)
+    except ToolCallParseError as exc:
+        logger.error(f"Error parsing tool call: {exc.message}")
+        return [tool_name, f"Tool call parsing error. Please check syntax: {exc.message}"]
 
-        tool_name = parsed_name
+    parsed_name, arguments = parsed_call
+    tool_name = parsed_name
+
+    try:
         logger.info(f"Executing tool: {tool_name}")
         logger.debug(f"Parsed arguments: {arguments}")
         result = None
