@@ -23,7 +23,7 @@ from pydantic import BaseModel, model_validator
 import json
 from typing import Optional, Dict, Any, Tuple, Set, List, Callable, cast, Iterable, Union, NamedTuple
 import prompt_templates
-from tools.tool_executor import get_tool_call_results
+from tools.tool_executor import get_tool_call_results, parse_tool_call
 from tools.tool_definitions import get_tool_definitions
 
 logging.basicConfig(
@@ -301,7 +301,7 @@ def _run_streaming_generation_loop(
                 logger.warning(f"[{tool_name}] Tool call detected but no <tool_call> tag found")
             else:
                 logger.info(f"[{tool_name}] Tool call detected")
-                t_name, t_args = _parse_tool_call(clean_text)
+                t_name, t_args = parse_tool_call(clean_text)
                 if not t_name:
                     _append_tool_result(messages, "error", "Tool call parsing failed.")
                 else:
@@ -586,73 +586,6 @@ def _inject_think_tag_if_missing(response_text: str, model_name: str) -> str:
         return "<think>" + response_text
     return response_text
 
-
-def _parse_tool_call(response_text: str) -> Tuple[str, Dict[str, Any]]:
-    try:
-        section = response_text.split("<tool_call>")[1].split("</tool_call>")[0]
-    except Exception:
-        return "", {}
-    lines = [l for l in section.strip().split("\n")]
-    tool_name = lines[0].strip() if lines else ""
-    arguments: Dict[str, Any] = {}
-
-    # Handle case where the model outputs a single-line JSON object with
-    # {"name": "...", "arguments": {...}} instead of the multiline format.
-    try:
-        import json as _json
-        if tool_name.startswith('{') and tool_name.endswith('}'):
-            obj = _json.loads(tool_name)
-            json_name = obj.get("name")
-            json_args = obj.get("arguments")
-            if isinstance(json_name, str):
-                tool_name = json_name
-            if isinstance(json_args, dict):
-                arguments.update(json_args)
-    except Exception:
-        # Fall back to multiline parsing below
-        pass
-    i = 1
-    while i < len(lines):
-        line = lines[i].strip()
-        if line.startswith('<arg_key>') and line.endswith('</arg_key>'):
-            key = line[9:-10]
-            i += 1
-            if i < len(lines) and lines[i].strip().startswith('<arg_value>'):
-                current = lines[i].strip()
-                if current.endswith('</arg_value>'):
-                    value = current[11:-12]
-                else:
-                    value_lines = []
-                    first = current[11:]
-                    if first:
-                        value_lines.append(first)
-                    i += 1
-                    while i < len(lines):
-                        current = lines[i]
-                        if current.strip().endswith('</arg_value>'):
-                            last = current.rstrip()[:-12]
-                            if last:
-                                value_lines.append(last)
-                            break
-                        else:
-                            value_lines.append(current)
-                        i += 1
-                    value = '\n'.join(value_lines)
-                v = value.strip()
-                if (v.startswith('[') and v.endswith(']')) or (v.startswith('{') and v.endswith('}')):
-                    import json
-                    try:
-                        arguments[key] = json.loads(v)
-                    except Exception:
-                        arguments[key] = value
-                else:
-                    arguments[key] = value
-                i += 1
-            else:
-                i += 1
-        else:
-            i += 1
-    return tool_name, arguments
 
 
 def _run_agent(

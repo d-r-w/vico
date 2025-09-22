@@ -2,6 +2,7 @@ import subprocess
 import re
 import json
 import logging
+from typing import Any, Dict, Tuple
 
 from offline_wikipedia_service import offline_wikipedia_service
 from tools.tool_definitions import get_full_topic_details_tool_name, perform_research_tool_name
@@ -10,6 +11,88 @@ from tools.tool_definitions import get_full_topic_details_tool_name, perform_res
 logger = logging.getLogger(__name__)
 
 MAX_TERMINAL_OUTPUT_LENGTH = 8000
+
+
+def parse_tool_call(response_text: str) -> Tuple[str, Dict[str, Any]]:
+    try:
+        section = response_text.split("<tool_call>")[1].split("</tool_call>")[0]
+    except Exception:
+        return "", {}
+
+    lines = [line for line in section.strip().split("\n")]
+    tool_name = lines[0].strip() if lines else ""
+    arguments: Dict[str, Any] = {}
+
+    try:
+        if tool_name.startswith("{") and tool_name.endswith("}"):
+            payload = json.loads(tool_name)
+            name = payload.get("name")
+            if isinstance(name, str):
+                tool_name = name
+            json_arguments = payload.get("arguments")
+            if isinstance(json_arguments, dict):
+                arguments.update(json_arguments)
+    except Exception:
+        pass
+
+    i = 1
+    while i < len(lines):
+        line = lines[i].strip()
+        if line.startswith("<arg_key>") and line.endswith("</arg_key>"):
+            key = line[9:-10]
+            i += 1
+            if i < len(lines) and lines[i].strip().startswith("<arg_value>"):
+                current = lines[i].strip()
+                if current.endswith("</arg_value>"):
+                    value = current[11:-12]
+                else:
+                    value_lines = []
+                    first_line = current[11:]
+                    if first_line:
+                        value_lines.append(first_line)
+                    i += 1
+                    while i < len(lines):
+                        current = lines[i]
+                        if current.strip().endswith("</arg_value>"):
+                            last_line = current.rstrip()[:-12]
+                            if last_line:
+                                value_lines.append(last_line)
+                            break
+                        value_lines.append(current)
+                        i += 1
+                    value = "\n".join(value_lines)
+
+                trimmed = value.strip()
+                if (trimmed.startswith("[") and trimmed.endswith("]")) or (
+                    trimmed.startswith("{") and trimmed.endswith("}")
+                ):
+                    try:
+                        arguments[key] = json.loads(trimmed)
+                    except Exception:
+                        arguments[key] = value
+                else:
+                    arguments[key] = value
+                i += 1
+            else:
+                i += 1
+        else:
+            i += 1
+
+    if not arguments:
+        json_match = re.search(r"\{.*\}", section, re.DOTALL)
+        if json_match:
+            try:
+                payload = json.loads(json_match.group(0))
+                name = payload.get("name")
+                if isinstance(name, str):
+                    tool_name = name
+                json_arguments = payload.get("arguments")
+                if isinstance(json_arguments, dict):
+                    arguments = json_arguments
+            except Exception:
+                pass
+
+    return tool_name, arguments
 
 def _truncate_terminal_output(text: str, max_length: int = MAX_TERMINAL_OUTPUT_LENGTH) -> str:
     """Truncate terminal output to prevent context overflow."""
@@ -33,87 +116,13 @@ def get_tool_call_results(response_text, passed_logger, memory_storage_service=N
     logger.info(f"Processing tool call from response text")
     logger.debug(f"Response text length: {len(response_text)} characters")
     
+    tool_name: str = "unknown"
     try:
-        tool_call_section = response_text.split("<tool_call>")[1].split("</tool_call>")[0]
-        
-        # Try to parse XML-style format first (new format)
-        lines = tool_call_section.strip().split('\n')
-        tool_name = lines[0].strip() if lines else ""
-        
-        # Parse arg_key/arg_value pairs with support for multi-line values
-        arguments = {}
-        i = 1
-        while i < len(lines):
-            line = lines[i].strip()
-            if line.startswith('<arg_key>') and line.endswith('</arg_key>'):
-                # Extract the key
-                key = line[9:-10]  # Remove <arg_key> and </arg_key>
-                
-                # Look for the corresponding arg_value
-                if i + 1 < len(lines):
-                    i += 1  # Move to next line
-                    
-                    # Check if arg_value starts on this line
-                    if lines[i].strip().startswith('<arg_value>'):
-                        # Collect all lines until we find </arg_value>
-                        value_lines = []
-                        current_line = lines[i].strip()
-                        
-                        # Check if it's a single-line value
-                        if current_line.endswith('</arg_value>'):
-                            # Single line value
-                            value = current_line[11:-12]  # Remove <arg_value> and </arg_value>
-                        else:
-                            # Multi-line value - start collecting
-                            # Remove opening tag from first line
-                            if current_line.startswith('<arg_value>'):
-                                first_line_content = current_line[11:]  # Remove <arg_value>
-                                if first_line_content:  # Only add if there's content after the tag
-                                    value_lines.append(first_line_content)
-                            
-                            # Continue collecting lines until we find </arg_value>
-                            i += 1
-                            while i < len(lines):
-                                current_line = lines[i]
-                                if current_line.strip().endswith('</arg_value>'):
-                                    # Last line - remove closing tag
-                                    last_line_content = current_line.rstrip()[:-12]  # Remove </arg_value>
-                                    if last_line_content:  # Only add if there's content before the tag
-                                        value_lines.append(last_line_content)
-                                    break
-                                else:
-                                    value_lines.append(current_line)
-                                i += 1
-                            
-                            # Join all lines to form the complete value
-                            value = '\n'.join(value_lines)
-                        
-                        # Try to parse as JSON if it looks like a list or dict
-                        if (value.strip().startswith('[') and value.strip().endswith(']')) or (value.strip().startswith('{') and value.strip().endswith('}')):
-                            try:
-                                arguments[key] = json.loads(value)
-                            except json.JSONDecodeError:
-                                arguments[key] = value
-                        else:
-                            arguments[key] = value
-                        
-                        i += 1  # Move to next line after </arg_value>
-                    else:
-                        i += 1
-                else:
-                    i += 1
-            else:
-                i += 1
-        
-        # If no XML-style arguments found, try JSON format (fallback)
-        if not arguments:
-            json_match = re.search(r'\{.*\}', tool_call_section, re.DOTALL)
-            if json_match:
-                tool_call_json = json.loads(json_match.group(0))
-                logger.debug(f"Parsed tool call JSON: {tool_call_json}")
-                tool_name = tool_call_json.get("name", tool_name)
-                arguments = tool_call_json.get("arguments", {})
-        
+        parsed_name, arguments = parse_tool_call(response_text)
+        if not parsed_name:
+            raise ValueError("Tool name missing in <tool_call> block")
+
+        tool_name = parsed_name
         logger.info(f"Executing tool: {tool_name}")
         logger.debug(f"Parsed arguments: {arguments}")
         result = None
@@ -254,9 +263,4 @@ If these matches aren't useful, simply attempt different keywords in a new `{per
                         
     except Exception as e:
         logger.error(f"Error processing tool call: {e}")
-        # Initialize tool_name in case it wasn't set due to parsing error
-        if 'tool_name' not in locals():
-            tool_name = "unknown"
-        if 'tool_call_section' not in locals():
-            tool_call_section = "unknown"
         return [tool_name, f"Tool call parsing error. Please check syntax: {str(e)}"]
