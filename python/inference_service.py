@@ -1,5 +1,6 @@
 from __future__ import annotations
 from contextlib import asynccontextmanager
+import subprocess
 from fastapi import FastAPI, Request, Query, HTTPException
 from fastapi.responses import StreamingResponse
 from mlx_vlm import load as vlm_load, apply_chat_template as vlm_apply_chat_template, generate as vlm_generate
@@ -858,10 +859,28 @@ class SubAgentExecutor:
             self._emit_item(StreamToken(text))
 
         def on_tool_start(name: str, args: Dict[str, Any]) -> None:
-            self._emit_item(StreamEvent("subagent_tool_call_start", {"tool_name": name, "input": args}))
+            self._emit_item(
+                StreamEvent(
+                    "subagent_tool_call_start",
+                    {
+                        "tool_name": name,
+                        "input": args,
+                        "parent_tool_name": self._tool_call_name,
+                    },
+                )
+            )
 
         def on_tool_end(name: str, output: Any) -> None:
-            self._emit_item(StreamEvent("subagent_tool_call_end", {"tool_name": name, "output": output}))
+            self._emit_item(
+                StreamEvent(
+                    "subagent_tool_call_end",
+                    {
+                        "tool_name": name,
+                        "output": output,
+                        "parent_tool_name": self._tool_call_name,
+                    },
+                )
+            )
 
         try:
             result = _run_agent(

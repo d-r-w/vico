@@ -15,6 +15,9 @@ interface SearchInputProps {
   onThinkingComplete?: (assistantName: string) => void;
   onToolCallStart?: (toolName: string, input?: unknown) => void;
   onToolCallEnd?: (toolName: string, output?: unknown) => void;
+  onSubagentTokenReceived?: (assistantName: string, token: string) => void;
+  onSubagentToolCallStart?: (parentToolName: string, toolName: string, input?: unknown) => void;
+  onSubagentToolCallEnd?: (parentToolName: string, toolName: string, output?: unknown) => void;
 }
 
 export interface SearchInputHandle {
@@ -22,14 +25,42 @@ export interface SearchInputHandle {
 }
 
 const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
-  ({ initialSearch = "", mode, onResponseReceived, onThinkingTokenReceived, onThinkingComplete, onToolCallStart, onToolCallEnd }, ref) => {
+  ({
+    initialSearch = "",
+    mode,
+    onResponseReceived,
+    onThinkingTokenReceived,
+    onThinkingComplete,
+    onToolCallStart,
+    onToolCallEnd,
+    onSubagentTokenReceived,
+    onSubagentToolCallStart,
+    onSubagentToolCallEnd,
+  }, ref) => {
     const [search, setSearch] = useState(initialSearch);
     const router = useRouter();
     const inputRef = useRef<HTMLInputElement>(null);
     const prevModeRef = useRef(mode);
     const [isLoading, setIsLoading] = useState(false);
-    const responseUpdateTimerRef = useRef<NodeJS.Timeout | null>(null);
+    const frameRequestRef = useRef<number | null>(null);
     const currentResponseRef = useRef<string>('');
+
+    const cancelScheduledResponse = useCallback(() => {
+      if (frameRequestRef.current === null) {
+        return;
+      }
+
+      if (typeof window !== "undefined") {
+        window.cancelAnimationFrame(frameRequestRef.current);
+      }
+
+      frameRequestRef.current = null;
+    }, []);
+
+    const flushPendingResponse = useCallback(() => {
+      cancelScheduledResponse();
+      onResponseReceived?.(currentResponseRef.current);
+    }, [cancelScheduledResponse, onResponseReceived]);
 
     useImperativeHandle(ref, () => ({
       focus: () => {
@@ -45,25 +76,26 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
       }
     }, [mode, router]);
 
-    const throttledResponseUpdate = useCallback((response: string) => {
+    const scheduleResponseUpdate = useCallback((response: string) => {
       currentResponseRef.current = response;
-      
-      if (responseUpdateTimerRef.current) {
-        clearTimeout(responseUpdateTimerRef.current);
+
+      if (frameRequestRef.current !== null) {
+        return;
       }
-      
-      responseUpdateTimerRef.current = setTimeout(() => {
-        onResponseReceived?.(currentResponseRef.current);
-      }, 16); // ~60fps for smooth updates
-    }, [onResponseReceived]);
+
+      if (typeof window === "undefined") {
+        flushPendingResponse();
+        return;
+      }
+
+      frameRequestRef.current = window.requestAnimationFrame(flushPendingResponse);
+    }, [flushPendingResponse]);
 
     useEffect(() => {
       return () => {
-        if (responseUpdateTimerRef.current) {
-          clearTimeout(responseUpdateTimerRef.current);
-        }
+        cancelScheduledResponse();
       };
-    }, []);
+    }, [cancelScheduledResponse]);
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       const value = e.target.value;
@@ -77,6 +109,7 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
       if (mode === MODES.CHAT || mode === MODES.AGENT) {
         try {
           setIsLoading(true);
+          currentResponseRef.current = '';
           onResponseReceived?.('');
           
           const response = await fetch('/api/memories/probe', {
@@ -133,7 +166,7 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
                   switch (eventData.type) {
                     case 'assistant_token': {
                       accumulatedResponse += eventData.token;
-                      throttledResponseUpdate(accumulatedResponse);
+                      scheduleResponseUpdate(accumulatedResponse);
                       break;
                     }
                     case 'thinking_token': {
@@ -153,25 +186,38 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
                       break;
                     }
                     case 'subagent_token': {
-                      // Non-reasoning subagent narration is surfaced via tool call UI.
+                      onSubagentTokenReceived?.(eventData.tool_name, eventData.token);
                       break;
                     }
                     case 'assistant_tool_call_start':
                     case 'subagent_tool_call_start':
                     case 'tool_call_start': // legacy
-                      onToolCallStart?.(eventData.tool_name, eventData.input);
+                      if (eventData.type === 'subagent_tool_call_start') {
+                        onSubagentToolCallStart?.(
+                          eventData.parent_tool_name,
+                          eventData.tool_name,
+                          eventData.input
+                        );
+                      } else {
+                        onToolCallStart?.(eventData.tool_name, eventData.input);
+                      }
                       break;
                     case 'assistant_tool_call_end':
                     case 'subagent_tool_call_end':
                     case 'tool_call_end': // legacy
-                      onToolCallEnd?.(eventData.tool_name, eventData.output);
+                      if (eventData.type === 'subagent_tool_call_end') {
+                        onSubagentToolCallEnd?.(
+                          eventData.parent_tool_name,
+                          eventData.tool_name,
+                          eventData.output
+                        );
+                      } else {
+                        onToolCallEnd?.(eventData.tool_name, eventData.output);
+                      }
                       break;
                     case 'end': {
                       setIsLoading(false);
-                      if (responseUpdateTimerRef.current) {
-                        clearTimeout(responseUpdateTimerRef.current);
-                        onResponseReceived?.(currentResponseRef.current);
-                      }
+                      flushPendingResponse();
                       return;
                     }
                     case 'error': {
@@ -196,7 +242,7 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
                   switch (eventData.type) {
                     case 'assistant_token':
                       accumulatedResponse += eventData.token;
-                      throttledResponseUpdate(accumulatedResponse);
+                      scheduleResponseUpdate(accumulatedResponse);
                       break;
                     case 'thinking_token':
                       onThinkingTokenReceived?.("Assistant", eventData.token);
@@ -211,7 +257,7 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
                       onThinkingComplete?.(eventData.tool_name);
                       break;
                     case 'subagent_token':
-                      // Non-reasoning subagent narration is surfaced via tool call UI.
+                      onSubagentTokenReceived?.(eventData.tool_name, eventData.token);
                       break;
                     case 'tool_call_start':
                       onToolCallStart?.(eventData.tool_name, eventData.input);
@@ -219,12 +265,23 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
                     case 'tool_call_end':
                       onToolCallEnd?.(eventData.tool_name, eventData.output);
                       break;
+                    case 'subagent_tool_call_start':
+                      onSubagentToolCallStart?.(
+                        eventData.parent_tool_name,
+                        eventData.tool_name,
+                        eventData.input
+                      );
+                      break;
+                    case 'subagent_tool_call_end':
+                      onSubagentToolCallEnd?.(
+                        eventData.parent_tool_name,
+                        eventData.tool_name,
+                        eventData.output
+                      );
+                      break;
                     case 'end':
                       setIsLoading(false);
-                      if (responseUpdateTimerRef.current) {
-                        clearTimeout(responseUpdateTimerRef.current);
-                        onResponseReceived?.(currentResponseRef.current);
-                      }
+                      flushPendingResponse();
                       break;
                     case 'error':
                       throw new Error(eventData.message);
@@ -242,6 +299,7 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
           console.error('Failed to probe memories:', error);
           onResponseReceived?.('Error: Failed to retrieve response');
         } finally {
+          cancelScheduledResponse();
           setIsLoading(false);
         }
       }

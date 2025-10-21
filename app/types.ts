@@ -22,6 +22,22 @@ export interface AssistantThinking {
   [assistantName: string]: ThinkingBlock[];
 }
 
+export interface SubagentState {
+  name: string;
+  chat: string;
+  thinkingBlocks: ThinkingBlock[];
+  toolCalls: ToolCallState[];
+}
+
+export interface ToolCallState {
+  id: string;
+  toolName: string;
+  state: "loading" | "ready" | "error" | "default";
+  input?: unknown;
+  output?: unknown;
+  subagent?: SubagentState;
+}
+
 export type SSEEvent =
   | { type: "assistant_token"; token: string }
   | { type: "thinking_token"; token: string }
@@ -33,11 +49,7 @@ export type SSEEvent =
   | { type: "tool_call_end"; tool_name: string; output?: unknown } // legacy
   | { type: "assistant_tool_call_start"; tool_name: string; input?: unknown }
   | { type: "assistant_tool_call_end"; tool_name: string; output?: unknown }
-  | { type: "subagent_tool_call_start"; tool_name: string; input?: unknown }
-  | { type: "subagent_tool_call_end"; tool_name: string; output?: unknown }
+  | { type: "subagent_tool_call_start"; parent_tool_name: string; tool_name: string; input?: unknown }
+  | { type: "subagent_tool_call_end"; parent_tool_name: string; tool_name: string; output?: unknown }
   | { type: "end" }
   | { type: "error"; message: string };
-
-export type TimelineItem =
-  | { kind: 'assistant'; assistantName: string; blocks: { content: string; isComplete: boolean }[] }
-  | { kind: 'tool_call'; toolName: string; state: "loading" | "ready" | "error" | "default"; input?: unknown; output?: unknown };

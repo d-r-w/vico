@@ -15,6 +15,9 @@ interface SearchHeaderProps {
   onThinkingComplete?: (assistantName: string) => void;
   onToolCallStart?: (toolName: string, input?: unknown) => void;
   onToolCallEnd?: (toolName: string, output?: unknown) => void;
+  onSubagentTokenReceived?: (assistantName: string, token: string) => void;
+  onSubagentToolCallStart?: (parentToolName: string, toolName: string, input?: unknown) => void;
+  onSubagentToolCallEnd?: (parentToolName: string, toolName: string, output?: unknown) => void;
 }
 
 export function SearchHeader({ 
@@ -25,7 +28,10 @@ export function SearchHeader({
   onThinkingTokenReceived,
   onThinkingComplete,
   onToolCallStart,
-  onToolCallEnd
+  onToolCallEnd,
+  onSubagentTokenReceived,
+  onSubagentToolCallStart,
+  onSubagentToolCallEnd,
 }: SearchHeaderProps) {
   const searchInputRef = useRef<SearchInputHandle>(null);
 
@@ -54,6 +60,9 @@ export function SearchHeader({
               onThinkingComplete={onThinkingComplete}
               onToolCallStart={onToolCallStart}
               onToolCallEnd={onToolCallEnd}
+              onSubagentTokenReceived={onSubagentTokenReceived}
+              onSubagentToolCallStart={onSubagentToolCallStart}
+              onSubagentToolCallEnd={onSubagentToolCallEnd}
             />
           </div>
         </div>
