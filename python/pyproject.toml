@@ -2,16 +2,17 @@
 name = "vico"
 version = "0.1.0"
 description = "A Python service for inference and memory management"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "fastapi",
     "huggingface-hub",
-    "mlx-vlm",
+    "mlx-vlm>=0.3.4",
     "pillow",
     "pydantic",
     "duckdb",
-    "mlx-lm>=0.28.0",
+    "mlx-lm>=0.3.4",
     "python-dotenv",
+    "torchvision"
 ]
 
 [build-system]

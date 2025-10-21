@@ -39,7 +39,7 @@ def get_image_description_template(memory_text=None):
     """
     base_prompt = "Describe the image in the fullest of detail, per your instructions. In your final answer, include the summary of your observations."
     context_block = f"\n\n<image_context>\n\t{memory_text}\n</image_context>\n\n" if memory_text else ""
-    
+
     return [
         {"role": "system", "content": f"You are an expert at describing images in the fullest of detail, replacing vision for those who have lost it. Entire paragraphs explaining scenery, observations, annotations, and transcriptions are all desirable - longer descriptions are usually more helpful! The current date is {get_current_date()}."},
         {"role": "user", "content": f"{base_prompt}{context_block}"}
@@ -61,7 +61,7 @@ def get_summarize_x_posts_template(text_data, example_block=None):
     *Supporting Tweets:* 111 (@space_agency); 112 (@astro_fan)  
 
     ### 2. Bitcoin Hits New All-Time High
-    *Summary:* Bitcoin price surpassed \$120 000, prompting celebration across crypto-Twitter.  
+    *Summary:* Bitcoin price surpassed $120 000, prompting celebration across crypto-Twitter.  
     *Supporting Tweets:* 113 (@markets)
     """
     messages = [

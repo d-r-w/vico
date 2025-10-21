@@ -3,7 +3,12 @@ from contextlib import asynccontextmanager
 import subprocess
 from fastapi import FastAPI, Request, Query, HTTPException
 from fastapi.responses import StreamingResponse
-from mlx_vlm import load as vlm_load, apply_chat_template as vlm_apply_chat_template, generate as vlm_generate
+from mlx_vlm import (
+    load as vlm_load,
+    apply_chat_template as vlm_apply_chat_template,
+    generate as vlm_generate,
+    GenerationResult as VLMGenerationResult,
+)
 from mlx_lm.utils import load as lm_load
 from mlx_lm.generate import stream_generate as lm_generate_streaming
 from mlx_lm.sample_utils import make_sampler, make_logits_processors
@@ -1035,16 +1040,27 @@ class SaveMemoryRequest(BaseModel):
 def _describe_image(image, memory_text: Optional[str] = None):
     model_info = model_registry.get_vlm_model(os.getenv("IMAGE_MODEL_NAME", "mlx-community/gemma-3-27b-it-8bit"))
     messages = prompt_templates.get_image_description_template(memory_text)
-    prompt = cast(str, vlm_apply_chat_template(model_info.processor, model_info.config, messages))
-    return vlm_generate(
+    prompt = cast(
+        str,
+        vlm_apply_chat_template(
+            model_info.processor,
+            model_info.config,
+            messages,
+            num_images=1,
+        ),
+    )
+    generation = vlm_generate(
         model_info.model,
         model_info.processor,
         prompt,
-        image,
+        [image],
         verbose=True,
         max_tokens=int(os.getenv("IMAGE_MAX_TOKENS", "100000")),
         temperature=float(os.getenv("IMAGE_TEMP", "0.7"))
     )
+    if isinstance(generation, VLMGenerationResult):
+        return generation.text
+    return generation
 
 
 def _process_image_memory(base64_string, memory_text: Optional[str] = None):
