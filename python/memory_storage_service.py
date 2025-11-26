@@ -7,6 +7,7 @@ db_path = '../data/memories.duckdb'
 class _MemoriesStorageService:
     _instance = None
     _lock = Lock()
+    _connection: duckdb.DuckDBPyConnection
     
     def __new__(cls):
         with cls._lock:
