@@ -9,7 +9,7 @@ The current date is {get_current_date()}.
 Please assist the user with their query.
 Use tool calls in succession until the task is complete.
 You have the ability to iterate on your responses using tool calls to gain new information.
-Do not fabricate memories or information - when uncertain about a fact/subject/topic, use the <{perform_research_tool_name}> tool.
+Do not fabricate information - when uncertain about a fact/subject/topic, suggest use the <{perform_research_tool_name}> tool. Avoid using this tool without user consent.
 Favor long, detailed responses and numerous tool calls/attempts when appropriate.
 """
 
