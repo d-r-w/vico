@@ -1025,6 +1025,60 @@ async def chat(
         headers=_STREAM_HEADERS,
     )
 
+class TTSRequest(BaseModel):
+    text: str
+
+@app.post("/api/tts/")
+async def tts(request: TTSRequest):
+    if not request.text:
+        raise HTTPException(status_code=400, detail="text is required")
+    
+    try:
+        logger.info(f"Generating TTS for text: {request.text[:100]}...")
+        
+        tts_script_path = os.getenv("TTS_SCRIPT_PATH")
+        tts_quantize = os.getenv("TTS_QUANTIZE")
+        
+        command = [
+            "uv", "run", 
+            tts_script_path, 
+            "-", "-", "--quantize", tts_quantize
+        ]
+        
+        # Run the command with the text as stdin
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=False  # Handle binary data
+        )
+        
+        # Send text as input and get the audio output
+        audio_data, error = process.communicate(input=request.text.encode('utf-8'))
+        
+        if process.returncode != 0:
+            logger.error(f"TTS command failed with return code {process.returncode}: {error.decode()}")
+            raise HTTPException(status_code=500, detail=f"TTS generation failed: {error.decode()}")
+        
+        logger.info(f"TTS generation completed successfully, audio size: {len(audio_data)} bytes")
+        
+        # Return the audio data as a streaming response
+        return StreamingResponse(
+            io.BytesIO(audio_data), 
+            media_type="audio/wav",
+            headers={
+                "Content-Disposition": "attachment; filename=tts_output.wav"
+            }
+        )
+        
+    except subprocess.TimeoutExpired:
+        logger.error("TTS generation timed out")
+        raise HTTPException(status_code=504, detail="TTS generation timed out")
+    except Exception as e:
+        logger.error(f"TTS generation error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"TTS generation failed: {str(e)}")
+
 
 class SaveMemoryRequest(BaseModel):
     memory_text: Optional[str] = None
