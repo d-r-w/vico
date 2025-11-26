@@ -3,6 +3,7 @@ export type Memory = {
   memory: string;
   image: string | null;
   created_at: string;
+  tags?: string[];
 }
 
 export const MODES = {

@@ -225,9 +225,10 @@ def get_tool_call_results(response_text, passed_logger, memory_storage_service=N
                     
             case "save_memory":
                 memory_text = arguments.get("memory_text", "")
+                tags = arguments.get("tags", None)
                 logger.info(f"Saving memory with length: {len(memory_text)} characters")
                 logger.debug(f"Memory text: {memory_text}")
-                memory_storage_service.save_memory(memory_text)
+                memory_storage_service.save_memory(memory_text, tag_ids=tags)
                 cache_manager.invalidate_memory_caches()
                 result = "Memory saved."
                 logger.info("Memory saved successfully")
@@ -250,9 +251,10 @@ def get_tool_call_results(response_text, passed_logger, memory_storage_service=N
                 logger.info(f"Memories search completed for terms: {terms}")
                 if memories:
                     result = ""
-                    for memory_id, memory_text, image, created_at in memories:
+                    for memory_id, memory_text, image, created_at, tags in memories:
                         result += f"\nMemory ID: {memory_id}\n"
                         result += f"Created: {created_at}\n"
+                        result += f"Tags: {', '.join(tags) if tags else 'None'}\n"
                         result += f"Content: {memory_text}\n"
                         if image:
                             result += f"[Contains image]\n"

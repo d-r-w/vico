@@ -647,7 +647,7 @@ def _get_memories_xml() -> str:
     indent_sequence = "\n\t"
     newline_char = "\n"
     return "\n\n\n".join([
-        f"<memory id='{row[0]}' createdAt='{row[1].strftime('%Y-%m-%d %H:%M')}'>\n\t{row[2].replace(newline_char, indent_sequence)}\n</memory>"
+        f"<memory id='{row[0]}' createdAt='{row[1].strftime('%Y-%m-%d %H:%M')}' tags='{','.join(row[3]) if row[3] else ''}'>\n\t{row[2].replace(newline_char, indent_sequence)}\n</memory>"
         for row in memories
     ])
 
@@ -1083,6 +1083,7 @@ async def tts(request: TTSRequest):
 class SaveMemoryRequest(BaseModel):
     memory_text: Optional[str] = None
     memory_image_base64: Optional[str] = None
+    tags: Optional[List[int]] = None
     
     @model_validator(mode="after")
     def require_one(cls, values) -> 'SaveMemoryRequest':
@@ -1117,7 +1118,7 @@ def _describe_image(image, memory_text: Optional[str] = None):
     return generation
 
 
-def _process_image_memory(base64_string, memory_text: Optional[str] = None):
+def _process_image_memory(base64_string, memory_text: Optional[str] = None, tags: Optional[List[int]] = None):
     decoded_bytes = base64.b64decode(base64_string)
     image = Image.open(io.BytesIO(decoded_bytes))
     image = ImageOps.exif_transpose(image).convert("RGB")
@@ -1126,7 +1127,7 @@ def _process_image_memory(base64_string, memory_text: Optional[str] = None):
         f"{memory_text}\n\nImage: {image_description}" if memory_text 
         else f"Image: {image_description}"
     )
-    memory_storage_service.save_memory(final_memory, decoded_bytes)
+    memory_storage_service.save_memory(final_memory, decoded_bytes, tag_ids=tags)
     cache_manager.invalidate_memory_caches()
 
 
@@ -1134,10 +1135,10 @@ def _process_image_memory(base64_string, memory_text: Optional[str] = None):
 async def save_memory(request: SaveMemoryRequest):
     if request.memory_image_base64:
         request.memory_image_base64 = request.memory_image_base64.split(',', 1)[1]
-        threading.Thread(target=_process_image_memory, args=(request.memory_image_base64, request.memory_text)).start()
+        threading.Thread(target=_process_image_memory, args=(request.memory_image_base64, request.memory_text, request.tags)).start()
         return {"success": True}
     if request.memory_text:
-        memory_storage_service.save_memory(request.memory_text)
+        memory_storage_service.save_memory(request.memory_text, tag_ids=request.tags)
         cache_manager.invalidate_memory_caches()
         return {"success": True}
 
@@ -1158,11 +1159,36 @@ async def edit_memory(request: Request):
     data = await request.json()
     memory_id = data.get('id')
     new_memory_text = data.get('memory')
+    tags = data.get('tags')
+    
     if not memory_id or not new_memory_text:
         return {"success": False, "error": "Both id and memory are required"}, 400
-    memory_storage_service.edit_memory(memory_id, new_memory_text)
+    
+    memory_storage_service.edit_memory(memory_id, new_memory_text, tag_ids=tags)
     cache_manager.invalidate_memory_caches()
     return {"success": True}
+
+
+class TagRequest(BaseModel):
+    label: str
+
+@app.post("/api/tags/")
+async def add_tag(request: TagRequest):
+    tag_id = memory_storage_service.add_tag(request.label)
+    return {"success": True, "id": tag_id}
+
+class DeleteTagRequest(BaseModel):
+    tag_id: int
+
+@app.delete("/api/tags/")
+async def delete_tag(request: DeleteTagRequest):
+    memory_storage_service.delete_tag(request.tag_id)
+    return {"success": True}
+
+@app.get("/api/tags/")
+async def get_tags():
+    tags = memory_storage_service.get_all_tags()
+    return {"tags": [{"id": t[0], "label": t[1]} for t in tags]}
 
 
 if __name__ == "__main__":

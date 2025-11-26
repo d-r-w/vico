@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import Image from "next/image";
-import { CalendarIcon, Trash, Save, X } from "lucide-react";
+import { CalendarIcon, Trash, Save, X, Plus, Tag } from "lucide-react";
 
 import type { Memory } from "@/app/types";
 import {
@@ -13,6 +13,15 @@ import {
   CardTitle
 } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
+import { Badge } from "@/components/ui/badge";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 interface MemoryCardProps {
   memory: Memory;
@@ -40,6 +49,11 @@ interface SaveState {
   hasError: boolean;
 }
 
+interface Tag {
+  id: number;
+  label: string;
+}
+
 const dateTimeFormat = new Intl.DateTimeFormat("sv-SE", {
   year: "numeric",
   month: "2-digit",
@@ -64,10 +78,15 @@ export function MemoryCard({ memory }: MemoryCardProps) {
     hasError: false
   });
   const [editedMemory, setEditedMemory] = useState(memory.memory);
+  const [currentTags, setCurrentTags] = useState<string[]>(memory.tags || []);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [availableTags, setAvailableTags] = useState<Tag[]>([]);
+  const [isTagPopoverOpen, setIsTagPopoverOpen] = useState(false);
+  const [newTagLabel, setNewTagLabel] = useState("");
   
   const timerRef = useRef<Timer>();
-  const hasChanges = editedMemory !== memory.memory;
+  const hasChanges = editedMemory !== memory.memory || 
+    JSON.stringify(currentTags.sort()) !== JSON.stringify((memory.tags || []).sort());
 
   useEffect(() => {
     return () => {
@@ -77,19 +96,61 @@ export function MemoryCard({ memory }: MemoryCardProps) {
     };
   }, []);
 
+  useEffect(() => {
+    if (isTagPopoverOpen) {
+      fetch('/api/tags')
+        .then(res => res.json())
+        .then(data => setAvailableTags(data.tags || []))
+        .catch(console.error);
+    }
+  }, [isTagPopoverOpen]);
+
   const handleSave = async () => {
     if (!hasChanges) return;
 
     setSaveState(prev => ({ ...prev, isSaving: true }));
     try {
+      let tagsToUse = availableTags;
+      if (currentTags.length > 0 && tagsToUse.length === 0) {
+          const res = await fetch('/api/tags');
+          if (res.ok) {
+             const data = await res.json();
+             tagsToUse = data.tags || [];
+             setAvailableTags(tagsToUse);
+          }
+      }
+
+      const ids: number[] = [];
+      for (const label of currentTags) {
+        const existing = tagsToUse.find(t => t.label === label);
+        if (existing) {
+          ids.push(existing.id);
+        } else {
+           const createRes = await fetch('/api/tags', {
+             method: 'POST',
+             headers: { 'Content-Type': 'application/json' },
+             body: JSON.stringify({ label })
+           });
+           if (createRes.ok) {
+             const data = await createRes.json();
+             if (data.success && data.id) ids.push(data.id);
+           }
+        }
+      }
+
       const res = await fetch('/api/memories', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: memory.id, memory: editedMemory }),
+        body: JSON.stringify({ 
+            id: memory.id, 
+            memory: editedMemory,
+            tags: ids
+        }),
       });
 
       if (!res.ok) throw new Error('Failed to save');
       memory.memory = editedMemory;
+      memory.tags = currentTags;
     } catch (err) {
       console.error('Failed to save memory:', err);
       setSaveState(prev => ({ ...prev, hasError: true }));
@@ -129,6 +190,17 @@ export function MemoryCard({ memory }: MemoryCardProps) {
     }
   };
 
+  const addTag = (label: string) => {
+    if (!currentTags.includes(label)) {
+      setCurrentTags([...currentTags, label]);
+    }
+    setNewTagLabel("");
+  };
+
+  const removeTag = (label: string) => {
+    setCurrentTags(currentTags.filter(t => t !== label));
+  };
+
   if (deleteState.isDeleted) return null;
 
   return (
@@ -137,14 +209,78 @@ export function MemoryCard({ memory }: MemoryCardProps) {
         key={memory.id}
         className="w-full max-w-md h-[32rem] flex flex-col"
       >
-        <CardHeader className="flex justify-between items-center flex-none">
-          <div className="w-full border-b border-primary/20 pb-2">
+        <CardHeader className="flex justify-between items-center flex-none pb-2">
+          <div className="w-full border-b border-primary/20 pb-2 flex justify-between items-start gap-2">
               <CardTitle className="text-lg font-semibold line-clamp-2 text-primary/80">
                 {editedMemory?.split("\n")[0]}
               </CardTitle>
           </div>
+          {/* Tags display */}
+          <div className="flex flex-wrap gap-1 mt-2 min-h-[1.5rem]">
+            {currentTags.map(tag => (
+                <Badge key={tag} variant="secondary" className="text-xs py-0 px-1 h-5 flex items-center gap-1">
+                    {tag}
+                    <X 
+                        className="w-3 h-3 cursor-pointer hover:text-red-500" 
+                        onClick={() => removeTag(tag)}
+                    />
+                </Badge>
+            ))}
+            
+            <Popover open={isTagPopoverOpen} onOpenChange={setIsTagPopoverOpen}>
+                <PopoverTrigger asChild>
+                    <Button variant="ghost" size="sm" className="h-5 w-5 p-0 rounded-full">
+                        <Plus className="w-3 h-3" />
+                    </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-64 p-2">
+                    <div className="flex flex-col gap-2">
+                        <div className="flex gap-2">
+                            <Input 
+                                value={newTagLabel} 
+                                onChange={(e) => setNewTagLabel(e.target.value)}
+                                placeholder="New tag..."
+                                className="h-8 text-sm"
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                        e.preventDefault();
+                                        if (newTagLabel.trim()) addTag(newTagLabel.trim());
+                                    }
+                                }}
+                            />
+                            <Button 
+                                size="sm" 
+                                className="h-8 px-2"
+                                onClick={() => {
+                                    if (newTagLabel.trim()) addTag(newTagLabel.trim());
+                                }}
+                            >
+                                Add
+                            </Button>
+                        </div>
+                        <div className="text-xs text-muted-foreground font-medium">Available Tags</div>
+                        <ScrollArea className="h-32 w-full rounded-md border">
+                            <div className="flex flex-col p-1">
+                                {availableTags.filter(t => !currentTags.includes(t.label)).map(tag => (
+                                    <Button
+                                        key={tag.id}
+                                        variant="ghost"
+                                        size="sm"
+                                        className="justify-start h-6 text-xs"
+                                        onClick={() => addTag(tag.label)}
+                                    >
+                                        {tag.label}
+                                    </Button>
+                                ))}
+                                {availableTags.length === 0 && <div className="p-2 text-xs text-center text-muted-foreground">No tags found</div>}
+                            </div>
+                        </ScrollArea>
+                    </div>
+                </PopoverContent>
+            </Popover>
+          </div>
         </CardHeader>
-        <CardContent className="flex-1 flex flex-col min-h-0">
+        <CardContent className="flex-1 flex flex-col min-h-0 pt-0">
           <div className="flex flex-col h-full gap-4">
             {memory.image && (
               <div 

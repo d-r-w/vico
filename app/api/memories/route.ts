@@ -8,14 +8,15 @@ async function fetchMemories(url: URL): Promise<Memory[]> {
     throw new Error(`HTTP error! status: ${response.status}`);
   }
 
-  const data: { memories: [number, string, string | null, string][] } =
+  const data: { memories: [number, string, string | null, string, string[]?][] } =
     await response.json();
 
-  return data.memories.map(([id, memory, image, created_at]) => ({
+  return data.memories.map(([id, memory, image, created_at, tags]) => ({
     id,
     memory,
     image,
-    created_at
+    created_at,
+    tags: tags || []
   }));
 }
 
@@ -86,13 +87,13 @@ export async function DELETE(request: Request) {
 export async function PATCH(request: Request) {
   try {
     const body = await request.json();
-    const { id, memory } = body;
+    const { id, memory, tags } = body;
 
     if (!id || !memory) {
       throw new Error("Both `id` and `memory` are required");
     }
 
-    const response = await fetch(`${INFERENCE_API_URL}edit_memory/`, getJSONRequest('PATCH', JSON.stringify({ id, memory })));
+    const response = await fetch(`${INFERENCE_API_URL}edit_memory/`, getJSONRequest('PATCH', JSON.stringify({ id, memory, tags })));
 
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
