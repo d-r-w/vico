@@ -176,16 +176,19 @@ def search_memories(search_terms):
     where_clauses = []
     params = []
     for term in search_terms:
-        where_clauses.append("LOWER(memory) LIKE CONCAT('%', LOWER(?), '%')")
+        where_clauses.append("(LOWER(m.memory) LIKE CONCAT('%', LOWER(?), '%') OR LOWER(t.label) LIKE CONCAT('%', LOWER(?), '%'))")
+        params.append(term)
         params.append(term)
     where_sql = " OR ".join(where_clauses)
 
     query = f"""
         WITH matches AS (
-            SELECT id, memory, image, created_at
-            FROM memories
+            SELECT DISTINCT m.id, m.memory, m.image, m.created_at
+            FROM memories m
+            LEFT JOIN memory_tags mt ON m.id = mt.memory_id
+            LEFT JOIN tags t ON mt.tag_id = t.id
             WHERE {where_sql}
-            ORDER BY created_at DESC
+            ORDER BY m.created_at DESC
             LIMIT 50
         )
         SELECT 
