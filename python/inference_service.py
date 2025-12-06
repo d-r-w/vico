@@ -1014,6 +1014,11 @@ def search_memories(search: List[str] = Query(..., description="Search query")):
     memories = memory_storage_service.search_memories(search)
     return {"memories": memories}
 
+@app.get("/api/memories_by_tag/")
+def get_memories_by_tag(tag_id: int = Query(..., description="Tag ID")):
+    memories = memory_storage_service.get_memories_by_tag_id(tag_id)
+    return {"memories": memories}
+
 @app.get("/api/chat/")
 async def chat(
     query: str = Query(..., description="Chat query"),
@@ -1187,7 +1192,7 @@ async def delete_tag(request: DeleteTagRequest):
 
 @app.get("/api/tags/")
 async def get_tags():
-    tags = memory_storage_service.get_all_tags()
+    tags = memory_storage_service.get_all_tags() or []
     return {"tags": [{"id": t[0], "label": t[1]} for t in tags]}
 
 

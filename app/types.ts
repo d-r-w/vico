@@ -1,3 +1,8 @@
+export type Tag = {
+  id: number;
+  label: string;
+}
+
 export type Memory = {
   id: number;
   memory: string;

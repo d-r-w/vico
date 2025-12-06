@@ -7,9 +7,10 @@ import { SearchHeader } from "@/app/components/search-header";
 
 interface ClientWrapperProps {
   initialSearch: string;
+  onToggleSidebar?: () => void;
 }
 
-export function ClientWrapper({ initialSearch }: ClientWrapperProps) {
+export function ClientWrapper({ initialSearch, onToggleSidebar }: ClientWrapperProps) {
   const [response, setResponse] = useState<string>("");
   const [mode, setMode] = useState<Mode>(MODES.SEARCH);
   const [assistantThinking, setAssistantThinking] = useState<ThinkingBlock[]>([]);
@@ -257,6 +258,7 @@ export function ClientWrapper({ initialSearch }: ClientWrapperProps) {
         onSubagentTokenReceived={handleSubagentToken}
         onSubagentToolCallStart={handleSubagentToolCallStart}
         onSubagentToolCallEnd={handleSubagentToolCallEnd}
+        onToggleSidebar={onToggleSidebar}
       />
       <div className="container mx-auto px-3 flex-1 flex flex-col h-[calc(100%-3.5rem)] pb-3">
         {response || assistantThinking.length > 0 || toolCalls.length > 0 ? (

@@ -34,10 +34,19 @@ export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const search = searchParams.get("search");
+    const tag = searchParams.get("tag");
 
     if (search) {
       const url = new URL(`${INFERENCE_API_URL}search_memories/`);
       url.searchParams.set("search", search);
+
+      const memories = await fetchMemories(url);
+      return NextResponse.json({ memories });
+    }
+
+    if (tag) {
+      const url = new URL(`${INFERENCE_API_URL}memories_by_tag/`);
+      url.searchParams.set("tag_id", tag);
 
       const memories = await fetchMemories(url);
       return NextResponse.json({ memories });

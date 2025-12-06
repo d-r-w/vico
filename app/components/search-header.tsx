@@ -5,6 +5,8 @@ import { Mode } from "@/app/types";
 import { SearchInput, SearchInputHandle } from "@/app/components/search-input";
 import { ThemeToggle } from "@/app/components/theme-toggle";
 import { ModeToggle } from "@/app/components/mode-toggle";
+import { Button } from "@/components/ui/button";
+import { PanelLeft } from "lucide-react";
 
 interface SearchHeaderProps {
   initialSearch: string;
@@ -18,6 +20,7 @@ interface SearchHeaderProps {
   onSubagentTokenReceived?: (assistantName: string, token: string) => void;
   onSubagentToolCallStart?: (parentToolName: string, toolName: string, input?: unknown) => void;
   onSubagentToolCallEnd?: (parentToolName: string, toolName: string, output?: unknown) => void;
+  onToggleSidebar?: () => void;
 }
 
 export function SearchHeader({ 
@@ -32,6 +35,7 @@ export function SearchHeader({
   onSubagentTokenReceived,
   onSubagentToolCallStart,
   onSubagentToolCallEnd,
+  onToggleSidebar,
 }: SearchHeaderProps) {
   const searchInputRef = useRef<SearchInputHandle>(null);
 
@@ -47,6 +51,12 @@ export function SearchHeader({
       <div className="container mx-auto px-2">
         <div className="flex flex-col sm:flex-row items-center gap-2">
           <div className="flex items-center gap-2 w-full sm:w-auto">
+            {onToggleSidebar && (
+              <Button variant="ghost" size="icon" onClick={onToggleSidebar} className="shrink-0">
+                <PanelLeft className="h-5 w-5" />
+                <span className="sr-only">Toggle Sidebar</span>
+              </Button>
+            )}
             <ThemeToggle />
             <ModeToggle mode={mode} onModeChange={handleModeChange} />
           </div>
@@ -69,4 +79,4 @@ export function SearchHeader({
       </div>
     </header>
   );
-} 
+}

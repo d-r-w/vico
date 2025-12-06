@@ -207,6 +207,31 @@ def search_memories(search_terms):
     rows = _execute_query(query, tuple(params), fetch=True)
     return process_memory_rows(rows)
     
+def get_memories_by_tag_id(tag_id):
+    rows = _execute_query("""
+        WITH tagged AS (
+            SELECT m.id, m.memory, m.image, m.created_at
+            FROM memories m
+            JOIN memory_tags mt ON m.id = mt.memory_id
+            WHERE mt.tag_id = ?
+            ORDER BY m.created_at DESC
+            LIMIT 50
+        )
+        SELECT 
+            m.id, 
+            m.memory, 
+            m.image, 
+            m.created_at,
+            list(t.label) FILTER (t.label IS NOT NULL) as tags
+        FROM tagged m
+        LEFT JOIN memory_tags mt ON m.id = mt.memory_id
+        LEFT JOIN tags t ON mt.tag_id = t.id
+        GROUP BY m.id, m.memory, m.image, m.created_at
+        ORDER BY m.created_at DESC;
+    """, (tag_id,), fetch=True)
+    
+    return process_memory_rows(rows)
+
 def get_all_memories():
     return _execute_query("""
         SELECT 
