@@ -296,7 +296,7 @@ def _run_streaming_generation_loop(
             think_event="thinking_token",
             think_complete_event="thinking_complete",
             extra_payload=None,
-            inject_think_if_missing=("Qwen3-Next-80B-A3B-Thinking" in model_name),
+            inject_think_if_missing=_is_qwen3_thinking_model(model_name),
         )
 
         # Keep response_text consistent with SSE injection behavior for parsing
@@ -392,7 +392,7 @@ def _build_agent_tool_call_handler(
         )
 
         stream = executor.stream_sse(
-            inject_think_if_missing=("Qwen3-Next-80B-A3B-Thinking" in model_name),
+            inject_think_if_missing=_is_qwen3_thinking_model(model_name),
         )
 
         return ToolCallOutcome(stream=stream, result_supplier=executor.result)
