@@ -1,8 +1,11 @@
 import base64
 import duckdb
+import logging
 import re
 from typing import List, Tuple
 from tools.tool_definitions import get_full_topic_details_tool_name
+
+logger = logging.getLogger("offline_wikipedia")
 
 class _OfflineWikipediaService:
     def __init__(self):
@@ -146,7 +149,11 @@ class _OfflineWikipediaService:
                         best_context = f"{best_context} … {snippet}"
                         
                 if len(best_context) > 800:
-                    print(f"Truncating context for {title} from {len(best_context)} to 800")
+                    logger.debug(
+                        "Truncating context for %s from %s to 800",
+                        title,
+                        len(best_context),
+                    )
                     best_context = best_context[:800].rstrip() + " …"
 
                 all_results.append({
@@ -169,7 +176,7 @@ class _OfflineWikipediaService:
             try:
                 title = base64.b64decode(topic_id).decode("utf-8")
             except Exception as e:
-                print(f"Error decoding topic_id '{topic_id}': {e}")
+                logger.warning("Error decoding topic_id %r", topic_id, exc_info=True)
                 results.append(f"Error decoding topic_id '{topic_id}': {e}")
                 continue
                 

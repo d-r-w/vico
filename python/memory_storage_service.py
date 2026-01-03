@@ -1,61 +1,66 @@
 import base64
 import duckdb
+import logging
 from threading import Lock
 
 db_path = '../data/memories.duckdb'
 
+logger = logging.getLogger("memory_storage")
+
 class _MemoriesStorageService:
     _instance = None
     _lock = Lock()
-    _connection: duckdb.DuckDBPyConnection
+    _initialized = False
     
     def __new__(cls):
         with cls._lock:
             if cls._instance is None:
                 cls._instance = super().__new__(cls)
-                cls._instance._connection = duckdb.connect(database=db_path, read_only=False)
+            if not cls._initialized:
                 cls._instance._initialize_schema()
+                cls._initialized = True
         return cls._instance
     
     def _initialize_schema(self):
-        cursor = self._connection.cursor()
-        cursor.execute("""
-            CREATE SEQUENCE IF NOT EXISTS memories_id_seq START 1;
-        """)
-        cursor.execute("""
-            CREATE SEQUENCE IF NOT EXISTS tags_id_seq START 1;
-        """)
-        
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS memories (
-                id INTEGER DEFAULT nextval('memories_id_seq') PRIMARY KEY,
-                memory TEXT,
-                image BLOB,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-        
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS tags (
-                id INTEGER DEFAULT nextval('tags_id_seq') PRIMARY KEY,
-                label TEXT UNIQUE NOT NULL
-            );
-        """)
-        
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS memory_tags (
-                memory_id INTEGER,
-                tag_id INTEGER,
-                PRIMARY KEY (memory_id, tag_id),
-                FOREIGN KEY (memory_id) REFERENCES memories(id),
-                FOREIGN KEY (tag_id) REFERENCES tags(id)
-            );
-        """)
-        self._connection.commit()
-        cursor.close()
-    
-    def _get_connection(self):
-        return self._connection
+        conn = duckdb.connect(database=db_path, read_only=False)
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE SEQUENCE IF NOT EXISTS memories_id_seq START 1;
+            """)
+            cursor.execute("""
+                CREATE SEQUENCE IF NOT EXISTS tags_id_seq START 1;
+            """)
+            
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS memories (
+                    id INTEGER DEFAULT nextval('memories_id_seq') PRIMARY KEY,
+                    memory TEXT,
+                    image BLOB,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS tags (
+                    id INTEGER DEFAULT nextval('tags_id_seq') PRIMARY KEY,
+                    label TEXT UNIQUE NOT NULL
+                );
+            """)
+            
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS memory_tags (
+                    memory_id INTEGER,
+                    tag_id INTEGER,
+                    PRIMARY KEY (memory_id, tag_id),
+                    FOREIGN KEY (memory_id) REFERENCES memories(id),
+                    FOREIGN KEY (tag_id) REFERENCES tags(id)
+                );
+            """)
+            conn.commit()
+            cursor.close()
+        finally:
+            conn.close()
 
 def process_memory_rows(rows):
     processed_rows = []
@@ -69,8 +74,13 @@ def process_memory_rows(rows):
              memory_id, memory, image, created_at = memory_row
              tags = []
         
-        if image:
-            image = base64.b64encode(image).decode('utf-8')
+        if image is not None:
+            if isinstance(image, str):
+                # Already encoded or string data
+                image = image
+            else:
+                # Bytes data
+                image = base64.b64encode(image).decode('utf-8')
             
         # Convert tags to list if it's None (DuckDB might return None for empty list in some versions/cases)
         if tags is None:
@@ -81,14 +91,17 @@ def process_memory_rows(rows):
     return processed_rows
 
 def _execute_query(query, params=(), fetch=False):
-    storage = _MemoriesStorageService()
-    conn = storage._get_connection()
-    cursor = conn.cursor()
-    cursor.execute(query, params)
-    results = cursor.fetchall() if fetch else None
-    conn.commit()
-    cursor.close()
-    return results
+    _MemoriesStorageService()  # Ensure schema is initialized
+    conn = duckdb.connect(database=db_path, read_only=False)
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        results = cursor.fetchall() if fetch else None
+        conn.commit()
+        cursor.close()
+        return results
+    finally:
+        conn.close()
 
 def save_memory(memory, media = None, tag_ids = None):
     rows = _execute_query("""
@@ -107,7 +120,12 @@ def save_memory(memory, media = None, tag_ids = None):
                     INSERT INTO memory_tags (memory_id, tag_id) VALUES (?, ?);
                 """, (memory_id, tag_id))
             except Exception as e:
-                print(f"Error linking tag {tag_id} to memory {memory_id}: {e}")
+                logger.warning(
+                    "Error linking tag %s to memory %s",
+                    tag_id,
+                    memory_id,
+                    exc_info=True,
+                )
     
 def delete_memory(memory_id):
     _execute_query("DELETE FROM memory_tags WHERE memory_id = ?", (memory_id,))
