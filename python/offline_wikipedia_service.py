@@ -1,7 +1,7 @@
-import base64
 import duckdb
 import logging
 import re
+import uuid
 from typing import List, Tuple
 from tools.tool_definitions import get_full_topic_details_tool_name
 
@@ -11,6 +11,8 @@ class _OfflineWikipediaService:
     def __init__(self):
         self._db_path = "../data/wiki/wiki.db"
         self._connection = duckdb.connect(database=self._db_path, read_only=True)
+        self._id_to_title = {}
+        self._title_to_id = {}
         
     @staticmethod
     def merge_intervals(intervals: List[Tuple[int, int]], gap: int = 0) -> List[Tuple[int, int]]:
@@ -109,75 +111,89 @@ class _OfflineWikipediaService:
         return snippets
         
     def fulltext_search(self, terms):
-        search_terms = terms[:5]
+        search_terms = [t.strip() for t in terms[:5] if t.strip()]
+        if not search_terms:
+            return ""
+
+        # Combine terms with OR for DuckDB FTS
+        fts_query = " OR ".join(search_terms)
+        
+        query = """
+        SELECT
+            title,
+            text,
+            fts_main_articles.match_bm25(rowid, ?) AS score
+        FROM articles
+        WHERE score IS NOT NULL
+        ORDER BY score DESC
+        LIMIT 25;
+        """
+        
+        cur = self._connection.cursor()
+        rows = cur.execute(query, [fts_query]).fetchall()
+        cur.close()
+
         all_results = []
         seen = set()
         match_no = 1
+        
+        # For context extraction, join all terms to find matches for any of them
+        context_query = " ".join(search_terms)
 
-        for term in search_terms:
-            query = """
-            SELECT
-                title,
-                text,
-                fts_main_articles.match_bm25(rowid, ?) AS score
-            FROM articles
-            WHERE score IS NOT NULL
-            ORDER BY score DESC
-            LIMIT 15;
-            """
-            cur = self._connection.cursor()
-            rows = cur.execute(query, [term]).fetchall()
-            cur.close()
+        for title, text, score in rows:
+            if title not in self._title_to_id:
+                topic_id = str(uuid.uuid4())
+                self._title_to_id[title] = topic_id
+                self._id_to_title[topic_id] = title
+            else:
+                topic_id = self._title_to_id[title]
 
-            for title, text, score in rows:
-                # Clean the text by removing consecutive short lines
-                cleaned_text = self.remove_consecutive_short_lines(text)
-                
-                topic_id = base64.b64encode(title.encode()).decode()
-                if topic_id in seen:
-                    continue
-                seen.add(topic_id)
+            if topic_id in seen:
+                continue
+            seen.add(topic_id)
 
-                contexts = self.extract_contexts(cleaned_text, term, ctx=50)
-                if not contexts:
-                    best_context = cleaned_text
-                else:
-                    best_context = contexts[0]
-                    for snippet in contexts[1:]:
-                        best_context = best_context.rstrip(" …")
-                        snippet = snippet.lstrip("… ")
-                        best_context = f"{best_context} … {snippet}"
-                        
-                if len(best_context) > 800:
-                    logger.debug(
-                        "Truncating context for %s from %s to 800",
-                        title,
-                        len(best_context),
-                    )
-                    best_context = best_context[:800].rstrip() + " …"
+            # Clean the text by removing consecutive short lines
+            cleaned_text = self.remove_consecutive_short_lines(text)
+            
+            contexts = self.extract_contexts(cleaned_text, context_query, ctx=50)
+            if not contexts:
+                best_context = cleaned_text
+            else:
+                best_context = contexts[0]
+                for snippet in contexts[1:]:
+                    best_context = best_context.rstrip(" …")
+                    snippet = snippet.lstrip("… ")
+                    best_context = f"{best_context} … {snippet}"
+                    
+            if len(best_context) > 800:
+                logger.debug(
+                    "Truncating context for %s from %s to 800",
+                    title,
+                    len(best_context),
+                )
+                best_context = best_context[:800].rstrip() + " …"
 
-                all_results.append({
-                    "content": (
-                        f"# [{match_no}]: {title}\n\n"
-                        f"{best_context}\n\n"
-                        "LLMs: Content is truncated. "
-                        f"Use the `{get_full_topic_details_tool_name}(['{topic_id}'])` tool "
-                        "to unlock full topic details."
-                    ),
-                    "score": score
-                })
-                match_no += 1
+            all_results.append({
+                "content": (
+                    f"# [{match_no}]: {title} ({topic_id})\n\n"
+                    f"{best_context}\n\n"
+                    "LLMs: Content is truncated. "
+                    f"Use the `{get_full_topic_details_tool_name}(['{topic_id}'])` tool "
+                    "to unlock full topic details."
+                ),
+                "score": score
+            })
+            match_no += 1
 
         return "\n\n---\n\n".join(r["content"] for r in all_results[:25])
         
     def get_full_wikipedia_article(self, topic_ids):
         results = []
         for topic_id in topic_ids:
-            try:
-                title = base64.b64decode(topic_id).decode("utf-8")
-            except Exception as e:
-                logger.warning("Error decoding topic_id %r", topic_id, exc_info=True)
-                results.append(f"Error decoding topic_id '{topic_id}': {e}")
+            title = self._id_to_title.get(topic_id)
+            if not title:
+                logger.warning("Topic ID %r not found in mapping", topic_id)
+                results.append(f"Topic ID '{topic_id}' not found. Please run a new search to get valid IDs.")
                 continue
                 
             cursor = self._connection.cursor()
