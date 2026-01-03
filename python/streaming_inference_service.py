@@ -24,12 +24,34 @@ from mlx_vlm import load as vlm_load
 
 import memory_storage_service
 import prompt_templates
-from tools.tool_definitions import get_tool_definitions
-from tools.tool_executor import get_tool_call_results, parse_tool_call, ToolCallParseError
+from agent_profiles import (
+    AgentProfile,
+    build_agent_profile_tool_definitions,
+    build_tool_usage_prompt,
+    filter_tool_definitions,
+    get_agent_cache_suffix,
+    get_agent_profile,
+    get_specialized_agent_profiles,
+)
+from tools.tool_executor import execute_tool_call, parse_tool_call, ToolCallParseError
 
 load_dotenv()
 
 logger = logging.getLogger("streaming_inference")
+
+_MODEL_GENERATION_LOCKS: Dict[str, threading.Lock] = {}
+_MODEL_GENERATION_LOCKS_GUARD = threading.Lock()
+
+
+def get_model_generation_lock(model_name: str) -> threading.Lock:
+    """Ensure only one generation runs per loaded model at a time (thread-safety)."""
+    with _MODEL_GENERATION_LOCKS_GUARD:
+        lock = _MODEL_GENERATION_LOCKS.get(model_name)
+        if lock is None:
+            lock = threading.Lock()
+            _MODEL_GENERATION_LOCKS[model_name] = lock
+        return lock
+
 
 class ModelInfo:
     """Container for VLM model components."""
@@ -110,44 +132,54 @@ class CacheManager:
         self._prompt_caches: Dict[str, Any] = {}
         self._initialized_caches: Set[str] = set()
         self._cache_dir = Path(cache_dir)
+        self._lock = threading.Lock()
         os.makedirs(self._cache_dir, exist_ok=True)
 
     def get_cache(self, cache_key: str, model: Any) -> Any:
-        if cache_key in self._prompt_caches:
-            logger.info(f"Using existing in-memory prompt cache for {cache_key}")
-            return self._prompt_caches[cache_key]
+        with self._lock:
+            if cache_key in self._prompt_caches:
+                logger.info(f"Using existing in-memory prompt cache for {cache_key}")
+                return self._prompt_caches[cache_key]
 
         cache_path = self._cache_dir / f"{cache_key}.safetensors"
         if cache_path.exists():
             logger.info(f"Loading prompt cache from disk: {cache_path}")
             try:
-                self._prompt_caches[cache_key] = load_prompt_cache(str(cache_path))
-                self._initialized_caches.add(cache_key)
-                return self._prompt_caches[cache_key]
+                loaded = load_prompt_cache(str(cache_path))
+                with self._lock:
+                    self._prompt_caches[cache_key] = loaded
+                    self._initialized_caches.add(cache_key)
+                    return self._prompt_caches[cache_key]
             except Exception as e:
                 logger.error(f"Error loading prompt cache from disk: {e}")
 
         logger.info(f"Creating new prompt cache for {cache_key}")
         prompt_cache = make_prompt_cache(model)
-        self._prompt_caches[cache_key] = prompt_cache
+        with self._lock:
+            self._prompt_caches[cache_key] = prompt_cache
         return prompt_cache
 
     def mark_initialized(self, cache_key: str) -> None:
-        if cache_key in self._prompt_caches:
-            self._initialized_caches.add(cache_key)
-            logger.info(f"Marked cache {cache_key} as fully initialized")
+        with self._lock:
+            if cache_key in self._prompt_caches:
+                self._initialized_caches.add(cache_key)
+                logger.info(f"Marked cache {cache_key} as fully initialized")
 
     def is_initialized(self, cache_key: str) -> bool:
-        return cache_key in self._initialized_caches
+        with self._lock:
+            return cache_key in self._initialized_caches
 
     def save_cache(self, cache_key: str) -> bool:
-        if cache_key not in self._prompt_caches:
-            return False
+        with self._lock:
+            if cache_key not in self._prompt_caches:
+                return False
+            cache_obj = self._prompt_caches[cache_key]
         cache_path = self._cache_dir / f"{cache_key}.safetensors"
         try:
             logger.info(f"Saving prompt cache to disk: {cache_path}")
-            save_prompt_cache(str(cache_path), self._prompt_caches[cache_key])
-            self._initialized_caches.add(cache_key)
+            save_prompt_cache(str(cache_path), cache_obj)
+            with self._lock:
+                self._initialized_caches.add(cache_key)
             return True
         except Exception as e:
             logger.error(f"Error saving prompt cache {cache_key}: {e}")
@@ -164,10 +196,11 @@ class CacheManager:
             self.release_cache(cache_key, delete_file=True)
 
     def release_cache(self, cache_key: str, delete_file: bool = True) -> None:
-        if cache_key in self._prompt_caches:
-            logger.info(f"Releasing prompt cache: {cache_key}")
-            del self._prompt_caches[cache_key]
-        self._initialized_caches.discard(cache_key)
+        with self._lock:
+            if cache_key in self._prompt_caches:
+                logger.info(f"Releasing prompt cache: {cache_key}")
+                del self._prompt_caches[cache_key]
+            self._initialized_caches.discard(cache_key)
         if delete_file:
             cache_path = self._cache_dir / f"{cache_key}.safetensors"
             if cache_path.exists():
@@ -298,6 +331,24 @@ def log_messages_summary(context_name: str, messages: List[Dict[str, Any]], max_
         logger.info(f"[{context_name}] m[{idx}] {role}{name_suffix} len={length}")
 
 
+def log_system_prompt(context_name: str, messages: List[Dict[str, Any]], max_chars: int = 4000) -> None:
+    """Log the system prompt content (truncated) for debugging agent initialization."""
+    for idx, m in enumerate(messages):
+        if m.get("role") != "system":
+            continue
+        content = m.get("content", "")
+        if not isinstance(content, str):
+            logger.info(f"[{context_name}] system prompt m[{idx}] (non-string content)")
+            return
+        text = content.strip()
+        length = len(text)
+        preview = text if length <= max_chars else text[:max_chars] + "\n...[truncated]"
+        logger.info(f"[{context_name}] system prompt m[{idx}] len={length}")
+        logger.info(f"[{context_name}] system prompt preview:\n{preview}")
+        return
+    logger.info(f"[{context_name}] system prompt not found")
+
+
 def log_returned_message(context_name: str, tool_name: str, content: str, max_chars: int = 1500) -> None:
     length = len(content) if isinstance(content, str) else 0
     preview = content if length <= max_chars else content[:max_chars] + "\n...[truncated]"
@@ -325,6 +376,9 @@ def setup_generation_context(
     query: str = "",
     is_agent: bool = False,
     tool_name: str = "",
+    *,
+    tool_usage_prompt: str,
+    allowed_tool_definitions: List[Dict[str, Any]] | None = None,
 ) -> Tuple[Any, Any, Any, str, int, int, Any, Any, List[Dict[str, Any]]]:
     """Common setup for model, cache, and generation parameters."""
     model, tokenizer = model_registry.get_lm_model(model_name)
@@ -332,12 +386,13 @@ def setup_generation_context(
 
     messages: List[Dict[str, Any]] = []
     if cache_manager.is_initialized(cache_key):
-        messages.extend(prompt_templates.get_vico_chat_template(context_xml, query, is_agent))
+        messages.extend(prompt_templates.get_vico_chat_template(context_xml, query, is_agent, tool_usage_prompt=tool_usage_prompt))
     else:
-        messages = prompt_templates.get_vico_chat_template(context_xml, query, is_agent)
+        messages = prompt_templates.get_vico_chat_template(context_xml, query, is_agent, tool_usage_prompt=tool_usage_prompt)
 
-    tools = get_tool_definitions()
+    tools = allowed_tool_definitions if allowed_tool_definitions is not None else []
     log_messages_summary(f"{tool_name}before_gen", messages)
+    log_system_prompt(f"{tool_name}before_gen", messages)
     prompt = tokenizer.apply_chat_template(messages, tools, add_generation_prompt=True, tokenize=False)
 
     sampler, logits = make_sampler_and_logits()
@@ -479,11 +534,21 @@ def build_agent_tool_call_handler(
     parent_label: str,
     model_name: str,
     model: Any,
-    tokenizer: Any,
+    tokenizer: Any
 ) -> ToolCallHandler:
     """Build a handler that spawns subagents for tool execution."""
 
     def handler(tool_call_name: str, tool_args: Dict[str, Any], _clean_text: str) -> ToolCallOutcome:
+        try:
+            logger.info(
+                "[%s] spawning subagent '%s' with args=%s",
+                parent_label,
+                tool_call_name,
+                json.dumps(tool_args, ensure_ascii=False) if isinstance(tool_args, dict) else str(tool_args)
+            )
+        except Exception:
+            logger.info("[%s] spawning subagent '%s'", parent_label, tool_call_name)
+        subagent_profile = get_agent_profile(tool_call_name, is_agent=True)
         executor = SubAgentExecutor(
             parent_label=parent_label,
             tool_call_name=tool_call_name,
@@ -491,6 +556,7 @@ def build_agent_tool_call_handler(
             model_name=model_name,
             model=model,
             tokenizer=tokenizer,
+            agent_profile=subagent_profile
         )
         stream = executor.stream_sse(inject_think_if_missing=is_qwen3_thinking_model(model_name))
         return ToolCallOutcome(stream=stream, result_supplier=executor.result)
@@ -498,14 +564,19 @@ def build_agent_tool_call_handler(
     return handler
 
 
-def build_direct_tool_call_handler() -> ToolCallHandler:
+def build_direct_tool_call_handler(*, agent_profile: AgentProfile) -> ToolCallHandler:
     """Build a handler that executes tools directly without subagents."""
 
-    def handler(_tool_call_name: str, _tool_args: Dict[str, Any], clean_text: str) -> ToolCallOutcome:
+    def handler(tool_call_name: str, tool_args: Dict[str, Any], _clean_text: str) -> ToolCallOutcome:
         def result_supplier() -> str:
             try:
-                _, tool_result = get_tool_call_results(clean_text, logger, memory_storage_service, cache_manager)
-                return tool_result
+                return execute_tool_call(
+                    tool_call_name,
+                    tool_args,
+                    allowed_tool_names=agent_profile.allowed_tool_names,
+                    memory_storage_service=memory_storage_service,
+                    cache_manager=cache_manager,
+                )
             except Exception as e:
                 logger.error(f"Direct tool call execution failed: {e}")
                 return ""
@@ -526,6 +597,7 @@ def run_streaming_generation_loop(
     logits: Any,
     tools: List[Dict[str, Any]],
     model_name: str,
+    agent_profile: AgentProfile,
     tool_name: str = "",
     on_token: Optional[Callable[[str], None]] = None,
     on_tool_call_start: Optional[Callable[[str, Dict[str, Any]], None]] = None,
@@ -535,39 +607,40 @@ def run_streaming_generation_loop(
 ) -> Iterable[str]:
     """Streaming generation loop that yields SSE events."""
     while True:
-        response = lm_generate_streaming(
-            model,
-            tokenizer,
-            prompt,
-            max_tokens=max_tokens,
-            prompt_cache=prompt_cache,
-            sampler=sampler,
-            max_kv_size=max_kv_size,
-            logits_processors=logits,
-        )
-
+        generation_lock = get_model_generation_lock(model_name)
         response_buffer = io.StringIO()
+        with generation_lock:
+            response = lm_generate_streaming(
+                model,
+                tokenizer,
+                prompt,
+                max_tokens=max_tokens,
+                prompt_cache=prompt_cache,
+                sampler=sampler,
+                max_kv_size=max_kv_size,
+                logits_processors=logits,
+            )
 
-        def _token_generator() -> Iterable[str]:
-            for part in response:
-                if part.text:
-                    chunk_text = part.text
-                    response_buffer.write(chunk_text)
-                    if on_token is not None:
-                        try:
-                            on_token(chunk_text)
-                        except Exception as e:
-                            logger.warning(f"[{tool_name}] token streaming error: {e}")
-                    yield chunk_text
+            def _token_generator() -> Iterable[str]:
+                for part in response:
+                    if part.text:
+                        chunk_text = part.text
+                        response_buffer.write(chunk_text)
+                        if on_token is not None:
+                            try:
+                                on_token(chunk_text)
+                            except Exception as e:
+                                logger.warning(f"[{tool_name}] token streaming error: {e}")
+                        yield chunk_text
 
-        yield from sse_stream_with_thinking(
-            iter_stream_tokens(_token_generator()),
-            plain_event="assistant_token",
-            think_event="thinking_token",
-            think_complete_event="thinking_complete",
-            extra_payload=None,
-            inject_think_if_missing=is_qwen3_thinking_model(model_name),
-        )
+            yield from sse_stream_with_thinking(
+                iter_stream_tokens(_token_generator()),
+                plain_event="assistant_token",
+                think_event="thinking_token",
+                think_complete_event="thinking_complete",
+                extra_payload=None,
+                inject_think_if_missing=is_qwen3_thinking_model(model_name),
+            )
 
         response_text = response_buffer.getvalue()
         response_text = inject_think_tag_if_missing(response_text, model_name)
@@ -587,6 +660,23 @@ def run_streaming_generation_loop(
                     append_tool_result(messages, "error", f"Tool call parsing failed: {exc.message}")
                 else:
                     t_name, t_args = tool_call
+                    if t_name not in agent_profile.allowed_tool_names:
+                        tool_result = (
+                            f"Error: Tool `{t_name}` is not permitted for this agent. "
+                            f"Allowed tools: {', '.join(sorted(agent_profile.allowed_tool_names)) if agent_profile.allowed_tool_names else '(none)'}"
+                        )
+                        append_tool_result(messages, t_name, tool_result)
+                        try:
+                            yield make_sse("assistant_tool_call_start", {"tool_name": t_name, "input": t_args})
+                            yield make_sse(
+                                "assistant_tool_call_end",
+                                {"tool_name": t_name, "output": clean_tool_output_for_event(tool_result)},
+                            )
+                        except Exception:
+                            pass
+                        log_messages_summary(f"{tool_name}after_tool", messages)
+                        prompt = tokenizer.apply_chat_template(messages, tools, add_generation_prompt=True, tokenize=False)
+                        continue
                     if on_tool_call_start is not None:
                         try:
                             on_tool_call_start(t_name, t_args)
@@ -602,7 +692,7 @@ def run_streaming_generation_loop(
                         parent_label=tool_name,
                         model_name=model_name,
                         model=model,
-                        tokenizer=tokenizer,
+                        tokenizer=tokenizer
                     )
 
                     try:
@@ -661,6 +751,7 @@ def collect_blocking_response(
     on_token: Optional[Callable[[str], None]] = None,
     on_tool_call_start: Optional[Callable[[str, Dict[str, Any]], None]] = None,
     on_tool_call_end: Optional[Callable[[str, Any], None]] = None,
+    agent_profile: AgentProfile,
 ) -> str:
     """Run generation loop to completion and return final response text."""
     final_text_parts: List[str] = []
@@ -668,7 +759,7 @@ def collect_blocking_response(
     def capture_final_text(text: str) -> None:
         final_text_parts.append(text)
 
-    handler = build_direct_tool_call_handler()
+    handler = build_direct_tool_call_handler(agent_profile=agent_profile)
 
     for _ in run_streaming_generation_loop(
         model=model,
@@ -688,6 +779,7 @@ def collect_blocking_response(
         on_tool_call_end=on_tool_call_end,
         tool_call_handler=handler,
         on_final_response_text=capture_final_text,
+        agent_profile=agent_profile,
     ):
         pass
 
@@ -697,10 +789,10 @@ def collect_blocking_response(
 def run_agent(
     tool_name: str,
     arguments: Dict[str, Any],
-    user_query: str,
     parent_model_name: str,
     parent_model: Any,
     parent_tokenizer: Any,
+    agent_profile: AgentProfile,
     on_token: Optional[Callable[[str], None]] = None,
     on_tool_call_start: Optional[Callable[[str, Dict[str, Any]], None]] = None,
     on_tool_call_end: Optional[Callable[[str, Any], None]] = None,
@@ -708,31 +800,46 @@ def run_agent(
     """Execute a subagent task with the given tool and arguments."""
     model, tokenizer = parent_model, parent_tokenizer
     logger.info(f"[Agent:{tool_name}] Reusing assistant model: {parent_model_name}")
+    try:
+        logger.info(
+            "[Agent:%s] init profile=%s allowed_tools=%s task=%s",
+            tool_name,
+            agent_profile.agent_id,
+            ",".join(sorted(agent_profile.allowed_tool_names)),
+            arguments.get("task", "")
+        )
+    except Exception:
+        logger.info("[Agent:%s] init profile=%s", tool_name, agent_profile.agent_id)
 
-    cache_key = f"{parent_model_name.split('/')[-1]}_agent_cache__{tool_name}"
+    cache_key = f"{parent_model_name.split('/')[-1]}_agent_cache__{tool_name}__{get_agent_cache_suffix(agent_profile)}"
     prompt_cache = cache_manager.get_cache(cache_key, model)
 
-    system_instructions = (
-        "You are a specialized sub-agent. Your goal is to execute the requested tool-task end-to-end "
-        "using available tools, iterating as needed. When finished, output a concise final result intended "
-        "to be consumed by the parent assistant. Do not include internal notes."
-    )
+    allowed_tool_definitions = filter_tool_definitions(agent_profile.allowed_tool_names)
+    tool_usage_prompt = build_tool_usage_prompt(allowed_tool_definitions=allowed_tool_definitions)
+    system_instructions = "\n".join(
+        [
+            "You are a specialized sub-agent. Your goal is to execute the requested tool-task end-to-end using available tools, iterating as needed.",
+            "When finished, output a concise final result intended to be consumed by the parent assistant. Do not include internal notes.",
+            "",
+            tool_usage_prompt,
+        ]
+    ).strip()
 
     messages: List[Dict[str, Any]] = [
         {"role": "system", "content": system_instructions},
         {
             "role": "user",
             "content": (
-                f"Parent query: {user_query}\n\n"
-                f"Tool to execute: {tool_name}\n"
-                f"Arguments: {arguments}\n\n"
+                f"Agent profile: {agent_profile.agent_id}\n"
+                f"Task: {arguments.get('task', '')}\n\n"
                 "Plan your steps and use tools with <tool_call> when needed."
             ),
         },
     ]
 
-    tools = get_tool_definitions()
+    tools = allowed_tool_definitions
     log_messages_summary(f"Agent:{tool_name}:before_gen", messages)
+    log_system_prompt(f"Agent:{tool_name}:before_gen", messages)
     prompt = tokenizer.apply_chat_template(messages, tools, add_generation_prompt=True, tokenize=False)
 
     sampler, logits = make_sampler_and_logits()
@@ -757,6 +864,7 @@ def run_agent(
         on_token=on_token,
         on_tool_call_start=on_tool_call_start,
         on_tool_call_end=on_tool_call_end,
+        agent_profile=agent_profile,
     )
 
     cache_manager.release_cache(cache_key, delete_file=True)
@@ -775,6 +883,7 @@ class SubAgentExecutor:
         model_name: str,
         model: Any,
         tokenizer: Any,
+        agent_profile: AgentProfile
     ) -> None:
         self._parent_label = parent_label
         self._tool_call_name = tool_call_name
@@ -782,6 +891,7 @@ class SubAgentExecutor:
         self._model_name = model_name
         self._model = model
         self._tokenizer = tokenizer
+        self._agent_profile = agent_profile
         self._queue: queue.Queue[Optional[StreamItem]] = queue.Queue()
         self._result_future: Future[str] = Future()
         self._thread = threading.Thread(target=self._run, name=f"SubAgent-{tool_call_name}")
@@ -819,10 +929,10 @@ class SubAgentExecutor:
             result = run_agent(
                 self._tool_call_name,
                 self._tool_args,
-                "",
                 self._model_name,
                 self._model,
                 self._tokenizer,
+                agent_profile=self._agent_profile,
                 on_token=on_token,
                 on_tool_call_start=on_tool_start,
                 on_tool_call_end=on_tool_end,
@@ -912,7 +1022,7 @@ def describe_image(image: Any, memory_text: Optional[str] = None) -> str:
     return generation
 
 
-def stream_chat(query: str, context_xml: str, *, is_agent: bool = True) -> Iterable[str]:
+def stream_chat(query: str, context_xml: str, *, is_agent: bool = True, agent_id: str | None = None) -> Iterable[str]:
     """
     Stream a chat response with agentic tool-calling support.
 
@@ -928,17 +1038,34 @@ def stream_chat(query: str, context_xml: str, *, is_agent: bool = True) -> Itera
     chat_model_name = os.getenv("CHAT_MODEL_NAME", default_model_name)
     agentic_model_name = os.getenv("AGENTIC_MODEL_NAME", default_model_name)
 
+    profile = get_agent_profile(agent_id, is_agent=is_agent)
+    if is_agent:
+        # Orchestrator sees specialized agents as tools (not raw tools).
+        agent_tool_definitions = build_agent_profile_tool_definitions(get_specialized_agent_profiles())
+        allowed_tool_definitions = agent_tool_definitions
+        tool_usage_prompt = build_tool_usage_prompt(allowed_tool_definitions=allowed_tool_definitions)
+    else:
+        allowed_tool_definitions = filter_tool_definitions(profile.allowed_tool_names)
+        tool_usage_prompt = build_tool_usage_prompt(allowed_tool_definitions=allowed_tool_definitions)
+
     model_name = agentic_model_name if is_agent else chat_model_name
-    cache_key = f"{model_name.split('/')[-1]}_memory_cache"
+    cache_key = f"{model_name.split('/')[-1]}_memory_cache__{get_agent_cache_suffix(profile)}"
 
     messages: List[Dict[str, Any]] = []
     if cache_manager.is_initialized(cache_key):
-        messages.extend(prompt_templates.get_vico_chat_template(context_xml, query, is_agent))
+        messages.extend(prompt_templates.get_vico_chat_template(context_xml, query, is_agent, tool_usage_prompt=tool_usage_prompt))
     else:
-        messages = prompt_templates.get_vico_chat_template(context_xml, query, is_agent)
+        messages = prompt_templates.get_vico_chat_template(context_xml, query, is_agent, tool_usage_prompt=tool_usage_prompt)
 
     model, tokenizer, prompt_cache, prompt, max_tokens, max_kv_size, sampler, logits, tools = setup_generation_context(
-        model_name, cache_key, context_xml, query, is_agent, "Assistant:"
+        model_name,
+        cache_key,
+        context_xml,
+        query,
+        is_agent,
+        "Assistant:",
+        tool_usage_prompt=tool_usage_prompt,
+        allowed_tool_definitions=allowed_tool_definitions,
     )
 
     yield from run_streaming_generation_loop(
@@ -954,12 +1081,23 @@ def stream_chat(query: str, context_xml: str, *, is_agent: bool = True) -> Itera
         tools=tools,
         model_name=model_name,
         tool_name="Assistant:",
+        tool_call_handler=(
+            build_agent_tool_call_handler(
+                parent_label="Assistant:",
+                model_name=model_name,
+                model=model,
+                tokenizer=tokenizer
+            )
+            if is_agent
+            else build_direct_tool_call_handler(agent_profile=profile)
+        ),
+        agent_profile=profile,
     )
 
     cache_manager.mark_initialized(cache_key)
 
 
-def stream_chat_with_memories(query: str, *, is_agent: bool = True) -> Iterable[str]:
+def stream_chat_with_memories(query: str, *, is_agent: bool = True, agent_id: str | None = None) -> Iterable[str]:
     """
     Stream a chat response with memory context automatically loaded.
 
@@ -971,6 +1109,6 @@ def stream_chat_with_memories(query: str, *, is_agent: bool = True) -> Iterable[
         SSE event strings
     """
     memories_xml = get_memories_xml()
-    yield from stream_chat(query, memories_xml, is_agent=is_agent)
+    yield from stream_chat(query, memories_xml, is_agent=is_agent, agent_id=agent_id)
     yield make_sse("end")
 

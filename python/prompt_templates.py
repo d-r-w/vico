@@ -1,22 +1,22 @@
 from datetime import datetime
-from tools.tool_definitions import perform_research_tool_name
 
 def get_current_date():
     return datetime.today().strftime('%Y-%m-%d')
 
-updated_instructions = f"""
-The current date is {get_current_date()}.
-Please assist the user with their query.
-Use tool calls in succession until the task is complete.
-You have the ability to iterate on your responses using tool calls to gain new information.
-Do not fabricate information - when uncertain about a fact/subject/topic, suggest use the <{perform_research_tool_name}> tool. Avoid using this tool without user consent.
-Favor long, detailed responses and numerous tool calls/attempts when appropriate.
-"""
+def build_system_instructions(*, tool_usage_prompt: str) -> str:
+    base = [
+        f"The current date is {get_current_date()}.",
+        "Please assist the user with their query.",
+    ]
 
-def get_vico_chat_template(context, query, is_deep=False):
+    base.append("")
+    base.append(tool_usage_prompt.strip())
+    return "\n".join(base).strip()
+
+def get_vico_chat_template(context, query, is_deep=False, *, tool_usage_prompt: str):
     messages = [
         {"role": "system", "content": f"""
-        {updated_instructions}
+        {build_system_instructions(tool_usage_prompt=tool_usage_prompt)}
         """}
     ]
 
@@ -51,45 +51,4 @@ def get_format_text_template(text_data):
         {"role": "user", "content": f"Please format the following text from a web search:\n\n{text_data}."}
     ]
     
-    return messages
-
-def get_summarize_x_posts_template(text_data, example_block=None):
-    example_block = example_block or """
-    DESIRED OUTPUT
-    ### 1. Artemis Moon Mission Clears Milestone
-    *Summary:* NASA’s Artemis rocket launched successfully, advancing plans for a lunar gateway.  
-    *Supporting Tweets:* 111 (@space_agency); 112 (@astro_fan)  
-
-    ### 2. Bitcoin Hits New All-Time High
-    *Summary:* Bitcoin price surpassed $120 000, prompting celebration across crypto-Twitter.  
-    *Supporting Tweets:* 113 (@markets)
-    """
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "You are an investigative journalist specializing in social-media analysis.\n"
-                "TASK:\n"
-                "1. **Silently read and cluster** the X.com posts by topic (do NOT output this thinking).\n"
-                "2. Output significant stories in order of importance.\n"
-                "   - For each story give:\n"
-                "     • A 5-8 word headline (Title Case).\n"
-                "     • A 1-2 sentence factual summary.\n"
-                "     • A list of tweet IDs and handles that support the story, merged if they are near-duplicates or simple reposts.\n"
-                "3. Cite only facts that appear verbatim in the tweets. No speculation.\n"
-                "4. Format exactly in markdown using the template shown below."
-            )
-        },
-        {
-            "role": "assistant",
-            "content": example_block.strip()
-        },
-        {
-            "role": "user",
-            "content": (
-                "POSTS TO ANALYZE:\n"
-                f"{text_data}\n"
-            )
-        }
-    ]
     return messages

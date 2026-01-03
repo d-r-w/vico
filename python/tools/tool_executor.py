@@ -182,7 +182,142 @@ def _truncate_terminal_output(text: str, max_length: int = MAX_TERMINAL_OUTPUT_L
         return text
     return text[:max_length] + "\n\n[Output truncated to avoid exceeding context window]"
 
-def get_tool_call_results(response_text, passed_logger, memory_storage_service=None, cache_manager=None):
+
+def execute_tool_call(
+    tool_name: str,
+    arguments: Dict[str, Any],
+    *,
+    allowed_tool_names: Optional[set[str]] = None,
+    memory_storage_service=None,
+    cache_manager=None,
+) -> str:
+    if allowed_tool_names is not None and tool_name not in allowed_tool_names:
+        allowed = ", ".join(sorted(allowed_tool_names)) if allowed_tool_names else "(none)"
+        logger.warning("Disallowed tool call attempted: %s (allowed: %s)", tool_name, allowed)
+        return f"Error: Tool `{tool_name}` is not permitted for this agent. Allowed tools: {allowed}"
+
+    result = None
+
+    match tool_name:
+        case "voice_response":
+            text_to_speak = arguments.get("text", "")
+            if text_to_speak:
+                logger.info("Invoking voice response with text length: %s characters", len(text_to_speak))
+                subprocess.Popen(["say", text_to_speak])
+                result = "Voice response was successful."
+
+        case "save_memory":
+            memory_text = arguments.get("memory_text", "")
+            tags = arguments.get("tags", None)
+            if memory_storage_service is None or cache_manager is None:
+                return "Error: memory storage service is unavailable."
+            logger.info("Saving memory with length: %s characters", len(memory_text))
+            memory_storage_service.save_memory(memory_text, tag_ids=tags)
+            cache_manager.invalidate_memory_caches()
+            result = "Memory saved."
+
+        case "edit_memory":
+            memory_id = arguments.get("memory_id", "")
+            new_memory_text = arguments.get("new_memory_text", "")
+            if memory_storage_service is None or cache_manager is None:
+                return "Error: memory storage service is unavailable."
+            logger.info("Editing memory ID: %s", memory_id)
+            memory_storage_service.edit_memory(memory_id, new_memory_text)
+            cache_manager.invalidate_memory_caches()
+            result = f"Memory `{memory_id}` edited with new memory text."
+
+        case "search_memories":
+            terms = arguments.get("terms", [])
+            if memory_storage_service is None:
+                return "Error: memory storage service is unavailable."
+            logger.info("Searching memories for terms: %s", terms)
+            memories = memory_storage_service.search_memories(terms)
+            if memories:
+                formatted = []
+                for memory_id, memory_text, image, created_at, tags in memories:
+                    formatted.append(
+                        "\n".join(
+                            [
+                                f"Memory ID: {memory_id}",
+                                f"Created: {created_at}",
+                                f"Tags: {', '.join(tags) if tags else 'None'}",
+                                f"Content: {memory_text}",
+                                "[Contains image]" if image else "",
+                                "-" * 40,
+                            ]
+                        ).strip()
+                    )
+                result = "\n".join(formatted).strip()
+            else:
+                result = "No memories found, try different keywords."
+
+        case "perform_research":
+            terms = arguments.get("terms", [])
+            logger.info("Searching Wikipedia for terms: %s", terms)
+            result = offline_wikipedia_service.fulltext_search(terms)
+            if result:
+                result += f"""
+                    
+To unlock full topic details, use the `{get_full_topic_details_tool_name}(['topic_id'])` tool for up to 5 of the above topics.
+
+If these matches aren't useful, simply attempt different keywords in a new `{perform_research_tool_name}` tool call.
+"""
+            else:
+                result = "No results found, try different keywords."
+
+        case "get_full_topic_details":
+            topic_ids = arguments.get("topic_ids", [])
+            logger.info("Getting full Wikipedia article details for topic IDs: %s", topic_ids)
+            result = offline_wikipedia_service.get_full_wikipedia_article(topic_ids)
+            if result:
+                result += f"""
+                    
+Retreived full topic details for [{topic_ids}]
+"""
+
+        case "terminal_command":
+            command = arguments.get("command", "")
+            logger.info("Processing terminal command: %s", command)
+
+            forbidden_patterns = [
+                r"rm\s+-rf\s+[/~]",  # Prevent dangerous rm commands
+                r">[>]?\s*[/~]",  # Prevent writing to root/home
+                r"\|\s*rm",  # Prevent piping to rm
+                r"sudo",  # Prevent sudo usage
+                r"chmod\s+[0-7]*7\b",  # Prevent adding execute permissions
+            ]
+
+            for pattern in forbidden_patterns:
+                if re.search(pattern, command, re.IGNORECASE):
+                    logger.error("Forbidden command pattern detected: %s", command)
+                    return "Error: Forbidden command pattern detected"
+
+            try:
+                if command.strip() and not command.strip()[0].isdigit():
+                    process = subprocess.run(
+                        ["/bin/bash", "-c", command], capture_output=True, text=True, timeout=30
+                    )
+                    result_lines = [f"Command executed: {command}", f"Exit code: {process.returncode}"]
+                    if process.stdout:
+                        result_lines.append(f"Output:\n{_truncate_terminal_output(process.stdout)}")
+                    if process.stderr:
+                        result_lines.append(f"Error output:\n{_truncate_terminal_output(process.stderr)}")
+                    if not process.stdout and not process.stderr:
+                        result_lines.append("Command completed with no output.")
+                    result = "\n".join(result_lines).strip()
+                else:
+                    result = "Error: Invalid command format"
+            except subprocess.TimeoutExpired:
+                result = "Error: Command timed out after 30 seconds"
+            except Exception as e:
+                result = f"Error executing command: {str(e)}"
+
+    if result is None:
+        return f"Error: Unknown tool `{tool_name}`."
+    return result
+
+
+def get_tool_call_results(response_text, passed_logger, memory_storage_service=None, cache_manager=None, allowed_tool_names=None):
     """
     Process tool call results from response text and execute the appropriate tool.
     
@@ -211,140 +346,13 @@ def get_tool_call_results(response_text, passed_logger, memory_storage_service=N
     try:
         logger.info(f"Executing tool: {tool_name}")
         logger.debug(f"Parsed arguments: {arguments}")
-        result = None
-            
-        match tool_name:
-            case "voice_response":
-                text_to_speak = arguments.get("text", "")
-                if text_to_speak:
-                    logger.info(f"Invoking voice response with text length: {len(text_to_speak)} characters")
-                    logger.debug(f"Voice response text: {text_to_speak}")
-                    subprocess.Popen(["say", text_to_speak])
-                    result = f"Voice response was successful."
-                    logger.info("Voice response completed successfully")
-                    
-            case "save_memory":
-                memory_text = arguments.get("memory_text", "")
-                tags = arguments.get("tags", None)
-                logger.info(f"Saving memory with length: {len(memory_text)} characters")
-                logger.debug(f"Memory text: {memory_text}")
-                memory_storage_service.save_memory(memory_text, tag_ids=tags)
-                cache_manager.invalidate_memory_caches()
-                result = "Memory saved."
-                logger.info("Memory saved successfully")
-                
-            case "edit_memory":
-                memory_id = arguments.get("memory_id", "")
-                new_memory_text = arguments.get("new_memory_text", "")
-                logger.info(f"Editing memory ID: {memory_id} with new text length: {len(new_memory_text)} characters")
-                logger.debug(f"New memory text: {new_memory_text}")
-                memory_storage_service.edit_memory(memory_id, new_memory_text)
-                cache_manager.invalidate_memory_caches()
-                result = f"Memory `{memory_id}` edited with new memory text."
-                logger.info(f"Memory {memory_id} edited successfully")
-                
-            case "search_memories":
-                terms = arguments.get("terms", [])
-                logger.info(f"Searching memories for terms: {terms}")
-                memories = memory_storage_service.search_memories(terms)
-                logger.debug(f"Found {len(memories)} related memories")
-                logger.info(f"Memories search completed for terms: {terms}")
-                if memories:
-                    result = ""
-                    for memory_id, memory_text, image, created_at, tags in memories:
-                        result += f"\nMemory ID: {memory_id}\n"
-                        result += f"Created: {created_at}\n"
-                        result += f"Tags: {', '.join(tags) if tags else 'None'}\n"
-                        result += f"Content: {memory_text}\n"
-                        if image:
-                            result += f"[Contains image]\n"
-                        result += "-" * 40 + "\n"
-                else:
-                    logger.info(f"No memories found for terms: {terms}")
-                    result = "No memories found, try different keywords."
-                
-            case "perform_research":
-                terms = arguments.get("terms", [])
-                logger.info(f"Searching Wikipedia for terms: {terms}")
-                result = offline_wikipedia_service.fulltext_search(terms)
-                memories = memory_storage_service.search_memories(terms)
-                logger.debug(f"Found {len(memories)} related memories")
-                
-                if result:
-                    logger.info(f"Wikipedia search returned {len(result)} characters of results")
-                    result += f"""
-                    
-To unlock full topic details, use the `{get_full_topic_details_tool_name}(['topic_id'])` tool for up to 5 of the above topics.
-
-If these matches aren't useful, simply attempt different keywords in a new `{perform_research_tool_name}` tool call.
-"""
-                else:
-                    logger.info("Wikipedia search returned no results")
-                    result = "No results found, try different keywords."
-                
-                logger.info(f"Wikipedia search completed for terms: {terms}")
-            
-            case "get_full_topic_details":
-                topic_ids = arguments.get("topic_ids", [])
-                logger.info(f"Getting full Wikipedia article details for topic IDs: {topic_ids}")
-                result = offline_wikipedia_service.get_full_wikipedia_article(topic_ids)
-                if result:
-                    logger.info(f"Successfully retrieved full topic details for {len(topic_ids)} topics, {len(result)} characters")
-                    result += f"""
-                    
-                    Retreived full topic details for [{topic_ids}]
-"""
-                else:
-                    logger.warning(f"No topic details found for topic IDs: {topic_ids}")
-                
-            case "terminal_command":
-                command = arguments.get("command", "")
-                logger.info(f"Processing terminal command: {command}")
-                
-                forbidden_patterns = [
-                    r'rm\s+-rf\s+[/~]',  # Prevent dangerous rm commands
-                    r'>[>]?\s*[/~]',      # Prevent writing to root/home
-                    r'\|\s*rm',           # Prevent piping to rm
-                    r'sudo',              # Prevent sudo usage
-                    r'chmod\s+[0-7]*7\b'  # Prevent adding execute permissions
-                ]
-                
-                # Check for forbidden patterns
-                for pattern in forbidden_patterns:
-                    if re.search(pattern, command, re.IGNORECASE):
-                        logger.error(f"Forbidden command pattern detected: {command}")
-                        result = f"Error: Forbidden command pattern detected"
-                        break
-                else:
-                    try:
-                        logger.info(f"Executing terminal command: {command}")
-                        if command.strip() and not command.strip()[0].isdigit():
-                            # Use subprocess.run to capture output
-                            process = subprocess.run(["/bin/bash", "-c", command], 
-                                                capture_output=True, text=True, timeout=30)
-                            
-                            result = f"Command executed: {command}\n"
-                            result += f"Exit code: {process.returncode}\n"
-                            
-                            if process.stdout:
-                                truncated_stdout = _truncate_terminal_output(process.stdout)
-                                result += f"Output:\n{truncated_stdout}\n"
-                            
-                            if process.stderr:
-                                truncated_stderr = _truncate_terminal_output(process.stderr)
-                                result += f"Error output:\n{truncated_stderr}\n"
-                            
-                            if not process.stdout and not process.stderr:
-                                result += "Command completed with no output."
-                        else:
-                            logger.error(f"Invalid command format: {command}")
-                            result = f"Error: Invalid command format"
-                    except subprocess.TimeoutExpired:
-                        logger.error(f"Command timed out: {command}")
-                        result = f"Error: Command timed out after 30 seconds"
-                    except Exception as e:
-                        logger.error(f"Error executing command '{command}': {str(e)}")
-                        result = f"Error executing command: {str(e)}"
+        result = execute_tool_call(
+            tool_name,
+            arguments,
+            allowed_tool_names=allowed_tool_names,
+            memory_storage_service=memory_storage_service,
+            cache_manager=cache_manager,
+        )
         
         logger.info(f"Tool call ({tool_name}) result: {result}")
         return [tool_name, result]

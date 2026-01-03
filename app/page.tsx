@@ -16,7 +16,7 @@ async function getTags(): Promise<Tag[]> {
     if (!res.ok) return [];
     const data = await res.json();
     return data.tags;
-  } catch (e) {
+  } catch {
     return [];
   }
 }

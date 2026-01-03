@@ -1,10 +1,3 @@
-"""
-FastAPI inference service.
-
-This module provides HTTP endpoints for chat, memories, tags, and TTS.
-Core streaming/inference logic is delegated to streaming_inference_service.
-"""
-
 from __future__ import annotations
 
 import base64
@@ -42,26 +35,16 @@ _STREAM_HEADERS = {
 }
 
 
-# -----------------------------------------------------------------------------
-# Chat Endpoint
-# -----------------------------------------------------------------------------
-
-
 @app.get("/api/chat/")
 async def chat(
     query: str = Query(..., description="Chat query"),
-    is_agent: bool = Query(False, description="Use the agentic model for the response"),
+    is_agent: bool = Query(False, description="Use the agentic model for the response")
 ):
     return StreamingResponse(
         stream_chat_with_memories(query, is_agent=is_agent),
         media_type="text/event-stream",
         headers=_STREAM_HEADERS,
     )
-
-
-# -----------------------------------------------------------------------------
-# Memory Endpoints
-# -----------------------------------------------------------------------------
 
 
 @app.get("/api/recent_memories/")
@@ -144,11 +127,6 @@ async def edit_memory(request: Request):
     return {"success": True}
 
 
-# -----------------------------------------------------------------------------
-# Tag Endpoints
-# -----------------------------------------------------------------------------
-
-
 class TagRequest(BaseModel):
     label: str
 
@@ -157,7 +135,6 @@ class TagRequest(BaseModel):
 async def add_tag(request: TagRequest):
     tag_id = memory_storage_service.add_tag(request.label)
     return {"success": True, "id": tag_id}
-
 
 class DeleteTagRequest(BaseModel):
     tag_id: int
@@ -175,14 +152,8 @@ async def get_tags():
     return {"tags": [{"id": t[0], "label": t[1]} for t in tags]}
 
 
-# -----------------------------------------------------------------------------
-# TTS Endpoint
-# -----------------------------------------------------------------------------
-
-
 class TTSRequest(BaseModel):
     text: str
-
 
 @app.post("/api/tts/")
 async def tts(request: TTSRequest):
@@ -221,11 +192,6 @@ async def tts(request: TTSRequest):
     except Exception as e:
         logger.error(f"TTS generation error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"TTS generation failed: {str(e)}")
-
-
-# -----------------------------------------------------------------------------
-# Entry Point
-# -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
     import uvicorn
