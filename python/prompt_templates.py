@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Optional
 
 def get_current_date():
     return datetime.today().strftime('%Y-%m-%d')
@@ -6,21 +7,24 @@ def get_current_date():
 def get_date_system_instructions():
     return f"The current date is {get_current_date()}. Your knowledge cutoff is prior to this, so events that happened after are not known to you. In this scenario, trust the user and use available tools to answer the query. Sources and information dated to {get_current_date()} are valid."
 
-def build_system_instructions(*, tool_usage_prompt: str) -> str:
+def build_system_instructions(*, tool_usage_prompt: str, extra_instructions: Optional[str] = None) -> str:
     base = [
         get_date_system_instructions(),
         "Please assist the user with their query.",
     ]
 
+    if extra_instructions:
+        base.extend(["", "SPECIAL INSTRUCTIONS:", extra_instructions])
+
     base.append("")
     base.append(tool_usage_prompt.strip())
     return "\n".join(base).strip()
 
-def get_vico_chat_template(query: str, tool_usage_prompt: str, prepend_system_instructions: bool = True):
+def get_vico_chat_template(query: str, tool_usage_prompt: str, prepend_system_instructions: bool = True, extra_instructions: Optional[str] = None):
     if prepend_system_instructions:
         messages = [
             {"role": "system", "content": f"""
-            {build_system_instructions(tool_usage_prompt=tool_usage_prompt)}
+            {build_system_instructions(tool_usage_prompt=tool_usage_prompt, extra_instructions=extra_instructions)}
             """}
         ]
     else:

@@ -8,7 +8,7 @@ from tools.tool_definitions import get_tool_definitions
 
 AGENT_GENERAL = "general"
 AGENT_MEMORY_MANAGER = "memory_manager"
-AGENT_DEV_SHELL = "dev_shell"
+AGENT_SHELL_OPERATOR = "shell_operator"
 AGENT_ORCHESTRATOR = "orchestrator"
 
 TOOL_SEARCH_MEMORIES = "search_memories"
@@ -26,11 +26,10 @@ TOOL_USAGE_NO_TOOLS = (
 
 @dataclass(frozen=True)
 class AgentProfile:
-    """Policy + prompt bundle for a specific agent persona."""
-
     agent_id: str
     description: str
     allowed_tool_names: Set[str]
+    system_instructions: Optional[str] = None
 
 
 def _fingerprint_toolset(tool_names: Iterable[str]) -> str:
@@ -54,23 +53,35 @@ def filter_tool_definitions(allowed_tool_names: Iterable[str]) -> List[Dict[str,
     return filtered
 
 
-def build_tool_usage_prompt(*, allowed_tool_definitions: Sequence[Dict[str, Any]]) -> str:
+def build_tool_usage_prompt(
+    *, 
+    allowed_tool_definitions: Sequence[Dict[str, Any]],
+    is_subagent: bool = False
+) -> str:
     if not allowed_tool_definitions:
         return TOOL_USAGE_NO_TOOLS
 
-    lines: List[str] = [
-        "You have access to a limited set of tools. Use them only when they materially improve response quality.",
-        "",
-        "Tool calling format (exact):",
-        "<tool_call>{\"name\": \"tool_name\", \"arguments\": {\"arg\": \"value\"}}",
-        "",
-        "Rules:",
-        "- Call tools sequentially; do not batch multiple <tool_call> blocks in one message.",
-        "- Use simple, minimal arguments that match the tool schema.",
-        "- After receiving <tool_call_results>, continue the task; do not repeat the same call without a new reason.",
-        "",
-        "Available tools:",
-    ]
+    lines: List[str] = []
+
+    if is_subagent:
+        # Subagent prompt - show available tools
+        lines.extend([
+            "",
+            "Available tools:",
+        ])
+    else:
+        # Orchestrator prompt - show available subagents
+        lines.extend([
+            "You are an agent orchestrator with access to subagents. Delegate to these agents to materially improve response quality.",
+            "",
+            "Rules:",
+            "- Call subagents sequentially; do not batch multiple <tool_call> blocks in one message.",
+            "- Subagents do not persist context between calls; each call is a new context. It is vital to provide the subagent with sufficient context to complete the task.",
+            "- Use simple, minimal arguments that match the tool schema.",
+            "- After receiving <tool_call_results> (the subagent response), continue the task; do not repeat the same call without a new reason.",
+            "",
+            "Available subagents:",
+        ])
 
     for tool in allowed_tool_definitions:
         function = tool.get("function") or {}
@@ -96,22 +107,26 @@ def get_agent_profile(agent_id: Optional[str]) -> AgentProfile:
         ),
         AGENT_MEMORY_MANAGER: AgentProfile(
             agent_id=AGENT_MEMORY_MANAGER,
-            description="Memory maintenance (search + save + edit).",
+            description="Memory maintenance agent.",
             allowed_tool_names={
                 TOOL_SEARCH_MEMORIES,
                 TOOL_SAVE_MEMORY,
                 TOOL_EDIT_MEMORY,
             },
         ),
-        AGENT_DEV_SHELL: AgentProfile(
-            agent_id=AGENT_DEV_SHELL,
-            description="Developer shell access via terminal_command only.",
+        AGENT_SHELL_OPERATOR: AgentProfile(
+            agent_id=AGENT_SHELL_OPERATOR,
+            description="Agent with access to a macos zsh shell environment. Can read web resources. Requested task can be an agentic goal - request minimal output to prevent context window bloat.",
             allowed_tool_names={TOOL_TERMINAL_COMMAND},
+            system_instructions=(
+                "You are operating in a macOS zsh environment. Strive to do more than just running commands, complete the task as fully as possible. You have the ability to read web resources using curl -L.\n"
+                "When finished, output a concise final result intended to be consumed by the parent assistant."
+            ),
         ),
         AGENT_ORCHESTRATOR: AgentProfile(
             agent_id=AGENT_ORCHESTRATOR,
-            description="Orchestrator agent. Delegates work to specialized agents (which have real tool access).",
-            allowed_tool_names={AGENT_GENERAL, AGENT_MEMORY_MANAGER, AGENT_DEV_SHELL},
+            description="Orchestrator agent. Delegates work and reasoning to specialized agents (which have real tool access). Continuously negotiates with available agents on the user's behalf to fully and successfully complete the task.",
+            allowed_tool_names={AGENT_GENERAL, AGENT_MEMORY_MANAGER, AGENT_SHELL_OPERATOR},
         ),
     }
     
@@ -124,32 +139,32 @@ def get_agent_profile(agent_id: Optional[str]) -> AgentProfile:
     return profile
 
 def get_specialized_agent_profiles() -> List[AgentProfile]:
-    """Profiles that should be exposed to the orchestrator as callable agent-tools."""
     return [
         get_agent_profile(AGENT_GENERAL),
         get_agent_profile(AGENT_MEMORY_MANAGER),
-        get_agent_profile(AGENT_DEV_SHELL),
+        get_agent_profile(AGENT_SHELL_OPERATOR),
     ]
 
 def build_agent_profile_tool_definitions(agent_profiles: Sequence[AgentProfile]) -> List[Dict[str, Any]]:
-    """Create tool schemas representing agent profiles (not raw tools)."""
     definitions: List[Dict[str, Any]] = []
     for profile in agent_profiles:
+        tool_list = ", ".join(f"`{tool}`" for tool in sorted(profile.allowed_tool_names)) if profile.allowed_tool_names else "none"
+        description = f"{profile.description} Agent Tools: {tool_list}"
         definitions.append(
             {
                 "type": "function",
                 "function": {
                     "name": profile.agent_id,
-                    "description": profile.description,
+                    "description": description,
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "task": {
+                            "detailed_task": {
                                 "type": "string",
-                                "description": "What you want this specialized agent to do - negotiate with the agents on the user's behalf to complete the task.",
+                                "description": "A detailed explanation of the end-to-end task you want this specialized agent to do (in plain english) - continuously negotiate with available agents on the user's behalf to fully and successfully complete the task.",
                             }
                         },
-                        "required": ["task"],
+                        "required": ["detailed_task"],
                     },
                 },
             }

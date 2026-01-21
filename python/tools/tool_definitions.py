@@ -69,7 +69,7 @@ def get_tool_definitions():
         "type": "function",
         "function": {
             "name": f"{search_memories_tool_name}",
-            "description": "When recalling personal facts or details (or explicit memories), perform a fulltext search on memories using multiple variations of simple terms (examples: 'cats', 'cat care', 'cat diet', 'cat health', 'cat nutrition', 'cat training')",
+            "description": "Perform a fulltext search on memories using multiple variations of simple terms (examples: 'cats', 'cat care', 'cat diet', 'cat health', 'cat nutrition', 'cat training')",
             "parameters": {
                 "type": "object",
                 "properties": {

@@ -463,6 +463,7 @@ def setup_generation_context(
     *,
     tool_usage_prompt: str,
     allowed_tool_definitions: List[Dict[str, Any]] | None = None,
+    extra_instructions: Optional[str] = None,
 ) -> Tuple[Any, Any, Any, str, int, int, Any, Any, List[Dict[str, Any]]]:
     """Common setup for model, cache, and generation parameters."""
     model, tokenizer = model_registry.get_lm_model(model_name)
@@ -470,9 +471,9 @@ def setup_generation_context(
 
     messages: List[Dict[str, Any]] = []
     if cache_manager.is_initialized(cache_key):
-        messages.extend(prompt_templates.get_vico_chat_template(query, tool_usage_prompt, False))
+        messages.extend(prompt_templates.get_vico_chat_template(query, tool_usage_prompt, False, extra_instructions=extra_instructions))
     else:
-        messages = prompt_templates.get_vico_chat_template(query, tool_usage_prompt)
+        messages = prompt_templates.get_vico_chat_template(query, tool_usage_prompt, extra_instructions=extra_instructions)
 
     tools = allowed_tool_definitions if allowed_tool_definitions is not None else []
     prompt = tokenizer.apply_chat_template(messages, tools, add_generation_prompt=True, tokenize=False)
@@ -895,11 +896,11 @@ def run_agent(
     logger.info(f"[Agent:{tool_name}] Reusing assistant model: {parent_model_name}")
     try:
         logger.info(
-            "[Agent:%s] init profile=%s allowed_tools=%s task=%s",
+            "[Agent:%s] init profile=%s allowed_tools=%s detailed_task=%s",
             tool_name,
             agent_profile.agent_id,
             ",".join(sorted(agent_profile.allowed_tool_names)),
-            arguments.get("task", "")
+            arguments.get("detailed_task", "")
         )
     except Exception:
         logger.info("[Agent:%s] init profile=%s", tool_name, agent_profile.agent_id)
@@ -908,17 +909,25 @@ def run_agent(
     prompt_cache = cache_manager.get_cache(cache_key, model)
 
     allowed_tool_definitions = filter_tool_definitions(agent_profile.allowed_tool_names)
-    tool_usage_prompt = build_tool_usage_prompt(allowed_tool_definitions=allowed_tool_definitions)
-    system_instructions = "\n".join(
-        [
-            prompt_templates.get_date_system_instructions(),
+    tool_usage_prompt = build_tool_usage_prompt(allowed_tool_definitions=allowed_tool_definitions, is_subagent=True)
+    
+    instructions_list = [
+        prompt_templates.get_date_system_instructions(),
+        "",
+        "You are a specialized sub-agent. Your goal is to execute the requested tool-task end-to-end using available tools, iterating as needed.",
+        "When finished, output a concise final result intended to be consumed by the parent assistant. Do not include internal notes.",
+        "",
+    ]
+    if agent_profile.system_instructions:
+        instructions_list.extend([
+            "SPECIAL INSTRUCTIONS:",
+            agent_profile.system_instructions,
             "",
-            "You are a specialized sub-agent. Your goal is to execute the requested tool-task end-to-end using available tools, iterating as needed.",
-            "When finished, output a concise final result intended to be consumed by the parent assistant. Do not include internal notes.",
-            "",
-            tool_usage_prompt,
-        ]
-    ).strip()
+        ])
+    instructions_list.append(tool_usage_prompt)
+    system_instructions = "\n".join(instructions_list).strip()
+
+    logger.info(f"[Agent:{tool_name}] system_instructions:\n{system_instructions}")
 
     messages: List[Dict[str, Any]] = [
         {"role": "system", "content": system_instructions},
@@ -926,7 +935,7 @@ def run_agent(
             "role": "user",
             "content": (
                 f"Agent profile: {agent_profile.agent_id}\n"
-                f"Task: {arguments.get('task', '')}\n\n"
+                f"Task: {arguments.get('detailed_task', '')}\n\n"
                 "Plan your steps and use tools with <tool_call> when needed."
             ),
         },
@@ -1142,9 +1151,12 @@ def stream_chat(query: str, context_xml: str, agent_id: str | None = None) -> It
 
     messages: List[Dict[str, Any]] = []
     if cache_manager.is_initialized(cache_key):
-        messages.extend(prompt_templates.get_vico_chat_template(query, tool_usage_prompt, False))
+        messages.extend(prompt_templates.get_vico_chat_template(query, tool_usage_prompt, False, extra_instructions=profile.system_instructions))
     else:
-        messages = prompt_templates.get_vico_chat_template(query, tool_usage_prompt)
+        messages = prompt_templates.get_vico_chat_template(query, tool_usage_prompt, extra_instructions=profile.system_instructions)
+
+    if messages and messages[0]["role"] == "system":
+        logger.info(f"[Assistant] system_instructions:\n{messages[0]['content']}")
 
     model, tokenizer, prompt_cache, prompt, max_tokens, max_kv_size, sampler, logits, tools = setup_generation_context(
         model_name,
@@ -1154,6 +1166,7 @@ def stream_chat(query: str, context_xml: str, agent_id: str | None = None) -> It
         "Assistant:",
         tool_usage_prompt=tool_usage_prompt,
         allowed_tool_definitions=allowed_tool_definitions,
+        extra_instructions=profile.system_instructions,
     )
 
     yield from run_streaming_generation_loop(
