@@ -6,6 +6,23 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
 
 from tools.tool_definitions import get_tool_definitions
 
+AGENT_GENERAL = "general"
+AGENT_MEMORY_MANAGER = "memory_manager"
+AGENT_DEV_SHELL = "dev_shell"
+AGENT_ORCHESTRATOR = "orchestrator"
+
+TOOL_SEARCH_MEMORIES = "search_memories"
+TOOL_PERFORM_RESEARCH = "perform_research"
+TOOL_GET_FULL_TOPIC_DETAILS = "get_full_topic_details"
+TOOL_SAVE_MEMORY = "save_memory"
+TOOL_EDIT_MEMORY = "edit_memory"
+TOOL_TERMINAL_COMMAND = "terminal_command"
+
+TOOL_USAGE_NO_TOOLS = (
+    "You do not have access to any tools.\n"
+    "Do not output <tool_call> blocks.\n"
+    "Answer using only the conversation context."
+)
 
 @dataclass(frozen=True)
 class AgentProfile:
@@ -39,17 +56,13 @@ def filter_tool_definitions(allowed_tool_names: Iterable[str]) -> List[Dict[str,
 
 def build_tool_usage_prompt(*, allowed_tool_definitions: Sequence[Dict[str, Any]]) -> str:
     if not allowed_tool_definitions:
-        return (
-            "You do not have access to any tools.\n"
-            "Do not output <tool_call> blocks.\n"
-            "Answer using only the conversation context."
-        )
+        return TOOL_USAGE_NO_TOOLS
 
     lines: List[str] = [
-        "You have access to a limited set of tools. Use them only when they materially improve correctness.",
+        "You have access to a limited set of tools. Use them only when they materially improve response quality.",
         "",
         "Tool calling format (exact):",
-        "<tool_call>{\"name\": \"tool_name\", \"arguments\": {\"arg\": \"value\"}}</tool_call>",
+        "<tool_call>{\"name\": \"tool_name\", \"arguments\": {\"arg\": \"value\"}}",
         "",
         "Rules:",
         "- Call tools sequentially; do not batch multiple <tool_call> blocks in one message.",
@@ -70,60 +83,53 @@ def build_tool_usage_prompt(*, allowed_tool_definitions: Sequence[Dict[str, Any]
     return "\n".join(lines).strip()
 
 
-def get_agent_profile(agent_id: Optional[str], *, is_agent: bool) -> AgentProfile:
-    resolved = (agent_id or "").strip()
-    if not resolved:
-        resolved = "chat" if not is_agent else "orchestrator"
-
+def get_agent_profile(agent_id: Optional[str]) -> AgentProfile:
     profiles: Dict[str, AgentProfile] = {
-        # No-tool profile for standard chat.
-        "chat": AgentProfile(
-            agent_id="chat",
-            description="No tools; pure chat.",
-            allowed_tool_names=set(),
-        ),
-        # Specialized agents (the orchestrator should see these as tools).
-        "general": AgentProfile(
-            agent_id="general",
+        AGENT_GENERAL: AgentProfile(
+            agent_id=AGENT_GENERAL,
             description="General assistant with memory search and offline research tools (no writes, no shell).",
-            allowed_tool_names={"search_memories", "perform_research", "get_full_topic_details"},
+            allowed_tool_names={
+                TOOL_SEARCH_MEMORIES,
+                TOOL_PERFORM_RESEARCH,
+                TOOL_GET_FULL_TOPIC_DETAILS,
+            },
         ),
-        # Memory write-enabled agent.
-        "memory_manager": AgentProfile(
-            agent_id="memory_manager",
+        AGENT_MEMORY_MANAGER: AgentProfile(
+            agent_id=AGENT_MEMORY_MANAGER,
             description="Memory maintenance (search + save + edit).",
-            allowed_tool_names={"search_memories", "save_memory", "edit_memory"},
+            allowed_tool_names={
+                TOOL_SEARCH_MEMORIES,
+                TOOL_SAVE_MEMORY,
+                TOOL_EDIT_MEMORY,
+            },
         ),
-        # Shell-enabled agent (dangerous; keep intentionally separate).
-        "dev_shell": AgentProfile(
-            agent_id="dev_shell",
+        AGENT_DEV_SHELL: AgentProfile(
+            agent_id=AGENT_DEV_SHELL,
             description="Developer shell access via terminal_command only.",
-            allowed_tool_names={"terminal_command"},
+            allowed_tool_names={TOOL_TERMINAL_COMMAND},
         ),
-        # Orchestrator sees specialized agents as "tools" and delegates into them.
-        "orchestrator": AgentProfile(
-            agent_id="orchestrator",
+        AGENT_ORCHESTRATOR: AgentProfile(
+            agent_id=AGENT_ORCHESTRATOR,
             description="Orchestrator agent. Delegates work to specialized agents (which have real tool access).",
-            allowed_tool_names={"general", "memory_manager", "dev_shell"},
+            allowed_tool_names={AGENT_GENERAL, AGENT_MEMORY_MANAGER, AGENT_DEV_SHELL},
         ),
     }
+    
+    resolved = (agent_id or "").strip()
 
     profile = profiles.get(resolved)
     if profile is None:
-        # Unknown agent_id: fail closed to a safe default rather than silently granting more power.
-        profile = profiles["orchestrator" if is_agent else "chat"]
+        profile = profiles[AGENT_ORCHESTRATOR]
 
     return profile
-
 
 def get_specialized_agent_profiles() -> List[AgentProfile]:
     """Profiles that should be exposed to the orchestrator as callable agent-tools."""
     return [
-        get_agent_profile("general", is_agent=True),
-        get_agent_profile("memory_manager", is_agent=True),
-        get_agent_profile("dev_shell", is_agent=True),
+        get_agent_profile(AGENT_GENERAL),
+        get_agent_profile(AGENT_MEMORY_MANAGER),
+        get_agent_profile(AGENT_DEV_SHELL),
     ]
-
 
 def build_agent_profile_tool_definitions(agent_profiles: Sequence[AgentProfile]) -> List[Dict[str, Any]]:
     """Create tool schemas representing agent profiles (not raw tools)."""
@@ -140,7 +146,7 @@ def build_agent_profile_tool_definitions(agent_profiles: Sequence[AgentProfile])
                         "properties": {
                             "task": {
                                 "type": "string",
-                                "description": "What you want this specialized agent to do.",
+                                "description": "What you want this specialized agent to do - negotiate with the agents on the user's behalf to complete the task.",
                             }
                         },
                         "required": ["task"],
@@ -154,5 +160,3 @@ def build_agent_profile_tool_definitions(agent_profiles: Sequence[AgentProfile])
 def get_agent_cache_suffix(profile: AgentProfile) -> str:
     """Stable suffix to prevent prompt-cache cross-contamination between agent policies."""
     return f"{profile.agent_id}__{_fingerprint_toolset(profile.allowed_tool_names)}"
-
-

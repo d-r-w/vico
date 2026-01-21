@@ -3,9 +3,12 @@ from datetime import datetime
 def get_current_date():
     return datetime.today().strftime('%Y-%m-%d')
 
+def get_date_system_instructions():
+    return f"The current date is {get_current_date()}. Your knowledge cutoff is prior to this, so events that happened after are not known to you. In this scenario, trust the user and use available tools to answer the query. Sources and information dated to {get_current_date()} are valid."
+
 def build_system_instructions(*, tool_usage_prompt: str) -> str:
     base = [
-        f"The current date is {get_current_date()}.",
+        get_date_system_instructions(),
         "Please assist the user with their query.",
     ]
 
@@ -13,12 +16,15 @@ def build_system_instructions(*, tool_usage_prompt: str) -> str:
     base.append(tool_usage_prompt.strip())
     return "\n".join(base).strip()
 
-def get_vico_chat_template(context, query, is_deep=False, *, tool_usage_prompt: str):
-    messages = [
-        {"role": "system", "content": f"""
-        {build_system_instructions(tool_usage_prompt=tool_usage_prompt)}
-        """}
-    ]
+def get_vico_chat_template(query: str, tool_usage_prompt: str, prepend_system_instructions: bool = True):
+    if prepend_system_instructions:
+        messages = [
+            {"role": "system", "content": f"""
+            {build_system_instructions(tool_usage_prompt=tool_usage_prompt)}
+            """}
+        ]
+    else:
+        messages = []
 
     messages.append({"role": "user", "content": query})
     

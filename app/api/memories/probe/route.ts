@@ -3,14 +3,13 @@ import { INFERENCE_API_URL } from "@/app/api/config";
 
 export async function POST(request: Request) {
   try {
-    const { query, isAgent } = await request.json();
+    const { query } = await request.json();
     if (!query?.trim()) {
       return NextResponse.json({ error: "Query is required" }, { status: 400 });
     }
 
     const url = new URL(`${INFERENCE_API_URL}chat/`);
     url.searchParams.set("query", query);
-    url.searchParams.set("is_agent", String(Boolean(isAgent)));
     const res = await fetch(url);
 
     if (!res.ok) {

@@ -37,11 +37,10 @@ _STREAM_HEADERS = {
 
 @app.get("/api/chat/")
 async def chat(
-    query: str = Query(..., description="Chat query"),
-    is_agent: bool = Query(False, description="Use the agentic model for the response")
+    query: str = Query(..., description="Chat query")
 ):
     return StreamingResponse(
-        stream_chat_with_memories(query, is_agent=is_agent),
+        stream_chat_with_memories(query),
         media_type="text/event-stream",
         headers=_STREAM_HEADERS,
     )
