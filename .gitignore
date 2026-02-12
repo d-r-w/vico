@@ -45,3 +45,4 @@ data/wiki/*.bz2
 data/prompt_caches
 python/.env
 AGENTS.md
+.vscode/settings.json
