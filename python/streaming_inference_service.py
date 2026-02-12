@@ -16,7 +16,7 @@ from typing import Any, Callable, Deque, Dict, Iterable, List, NamedTuple, Optio
 
 from dotenv import load_dotenv
 from mlx_lm.generate import stream_generate as lm_generate_streaming
-from mlx_lm.models.cache import load_prompt_cache, make_prompt_cache, save_prompt_cache
+from mlx_lm.models.cache import make_prompt_cache
 from mlx_lm.sample_utils import make_logits_processors, make_sampler
 from mlx_lm.utils import load as lm_load
 from mlx_vlm import apply_chat_template as vlm_apply_chat_template
@@ -138,8 +138,27 @@ class CacheManager:
         self._debug_context_by_cache_key: Dict[str, Deque[Dict[str, Any]]] = {}
         os.makedirs(self._cache_dir, exist_ok=True)
 
-    def _debug_enabled(self) -> bool:
-        return os.getenv("LOG_CONTEXT_PER_CACHE", "0") == "1"
+    def get_cache(self, cache_key: str, model: Any) -> Any:
+        with self._lock:
+            if cache_key in self._prompt_caches:
+                logger.info(f"Using existing in-memory prompt cache for {cache_key}")
+                return self._prompt_caches[cache_key]
+
+        logger.info(f"Creating new prompt cache for {cache_key}")
+        prompt_cache = make_prompt_cache(model)
+        with self._lock:
+            self._prompt_caches[cache_key] = prompt_cache
+        return prompt_cache
+
+    def mark_initialized(self, cache_key: str) -> None:
+        with self._lock:
+            if cache_key in self._prompt_caches:
+                self._initialized_caches.add(cache_key)
+                logger.info(f"Marked cache {cache_key} as fully initialized")
+
+    def is_initialized(self, cache_key: str) -> bool:
+        with self._lock:
+            return cache_key in self._initialized_caches
 
     def record_cache_context(
         self,
@@ -215,81 +234,16 @@ class CacheManager:
                 logger.info("[cache=%s] record[%d] messages:\n%s", cache_key, idx, messages_json)
         logger.info("[cache=%s] CONTEXT_DUMP_END", cache_key)
 
-    def get_cache(self, cache_key: str, model: Any) -> Any:
-        with self._lock:
-            if cache_key in self._prompt_caches:
-                logger.info(f"Using existing in-memory prompt cache for {cache_key}")
-                return self._prompt_caches[cache_key]
-
-        cache_path = self._cache_dir / f"{cache_key}.safetensors"
-        if cache_path.exists():
-            logger.info(f"Loading prompt cache from disk: {cache_path}")
-            try:
-                loaded = load_prompt_cache(str(cache_path))
-                with self._lock:
-                    self._prompt_caches[cache_key] = loaded
-                    self._initialized_caches.add(cache_key)
-                    return self._prompt_caches[cache_key]
-            except Exception as e:
-                logger.error(f"Error loading prompt cache from disk: {e}")
-
-        logger.info(f"Creating new prompt cache for {cache_key}")
-        prompt_cache = make_prompt_cache(model)
-        with self._lock:
-            self._prompt_caches[cache_key] = prompt_cache
-        return prompt_cache
-
-    def mark_initialized(self, cache_key: str) -> None:
-        with self._lock:
-            if cache_key in self._prompt_caches:
-                self._initialized_caches.add(cache_key)
-                logger.info(f"Marked cache {cache_key} as fully initialized")
-
-    def is_initialized(self, cache_key: str) -> bool:
-        with self._lock:
-            return cache_key in self._initialized_caches
-
-    def save_cache(self, cache_key: str) -> bool:
-        with self._lock:
-            if cache_key not in self._prompt_caches:
-                return False
-            cache_obj = self._prompt_caches[cache_key]
-        cache_path = self._cache_dir / f"{cache_key}.safetensors"
-        try:
-            logger.info(f"Saving prompt cache to disk: {cache_path}")
-            save_prompt_cache(str(cache_path), cache_obj)
-            with self._lock:
-                self._initialized_caches.add(cache_key)
-            return True
-        except Exception as e:
-            logger.error(f"Error saving prompt cache {cache_key}: {e}")
-            return False
-
-    def save_all(self) -> None:
-        for cache_key in list(self._prompt_caches.keys()):
-            self.save_cache(cache_key)
-
-    def invalidate_memory_caches(self) -> None:
-        memory_cache_keys = [k for k in list(self._prompt_caches.keys()) if "_memory_cache" in k]
-        for cache_key in memory_cache_keys:
-            logger.info(f"Invalidating memory cache: {cache_key}")
-            self.release_cache(cache_key, delete_file=True)
-
-    def release_cache(self, cache_key: str, delete_file: bool = True) -> None:
+    def release_cache(self, cache_key: str) -> None:
         with self._lock:
             if cache_key in self._prompt_caches:
                 logger.info(f"Releasing prompt cache: {cache_key}")
                 del self._prompt_caches[cache_key]
             self._initialized_caches.discard(cache_key)
             self._debug_context_by_cache_key.pop(cache_key, None)
-        if delete_file:
-            cache_path = self._cache_dir / f"{cache_key}.safetensors"
-            if cache_path.exists():
-                try:
-                    os.remove(cache_path)
-                    logger.info(f"Deleted cache file: {cache_path}")
-                except OSError as e:
-                    logger.warning(f"Error deleting cache file {cache_path}: {e}")
+
+    def _debug_enabled(self) -> bool:
+        return os.getenv("LOG_CONTEXT_PER_CACHE", "0") == "1"
 
 
 model_registry = ModelRegistry()
@@ -970,7 +924,7 @@ def run_agent(
         agent_profile=agent_profile,
     )
 
-    cache_manager.release_cache(cache_key, delete_file=True)
+    cache_manager.release_cache(cache_key)
     return result
 
 

@@ -83,7 +83,6 @@ def _process_image_memory(base64_string: str, memory_text: Optional[str] = None,
     image_description = describe_image(image, memory_text)
     final_memory = f"{memory_text}\n\nImage: {image_description}" if memory_text else f"Image: {image_description}"
     memory_storage_service.save_memory(final_memory, decoded_bytes, tag_ids=tags)
-    cache_manager.invalidate_memory_caches()
 
 
 @app.post("/api/save_memory/")
@@ -96,7 +95,6 @@ async def save_memory(request: SaveMemoryRequest):
         return {"success": True}
     if request.memory_text:
         memory_storage_service.save_memory(request.memory_text, tag_ids=request.tags)
-        cache_manager.invalidate_memory_caches()
         return {"success": True}
 
 
@@ -107,7 +105,6 @@ class DeleteMemoryRequest(BaseModel):
 @app.delete("/api/delete_memory/")
 async def delete_memory(request: DeleteMemoryRequest):
     memory_storage_service.delete_memory(request.memory_id)
-    cache_manager.invalidate_memory_caches()
     return {"success": True}
 
 
@@ -122,7 +119,6 @@ async def edit_memory(request: Request):
         return {"success": False, "error": "Both id and memory are required"}, 400
 
     memory_storage_service.edit_memory(memory_id, new_memory_text, tag_ids=tags)
-    cache_manager.invalidate_memory_caches()
     return {"success": True}
 
 

@@ -213,7 +213,6 @@ def execute_tool_call(
                 return "Error: memory storage service is unavailable."
             logger.info("Saving memory with length: %s characters", len(memory_text))
             memory_storage_service.save_memory(memory_text, tag_ids=tags)
-            cache_manager.invalidate_memory_caches()
             result = "Memory saved."
 
         case "edit_memory":
@@ -223,7 +222,6 @@ def execute_tool_call(
                 return "Error: memory storage service is unavailable."
             logger.info("Editing memory ID: %s", memory_id)
             memory_storage_service.edit_memory(memory_id, new_memory_text)
-            cache_manager.invalidate_memory_caches()
             result = f"Memory `{memory_id}` edited with new memory text."
 
         case "search_memories":
