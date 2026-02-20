@@ -6,13 +6,13 @@ requires-python = ">=3.10"
 dependencies = [
     "fastapi",
     "huggingface-hub",
-    "mlx-vlm>=0.3.4",
+    "mlx-vlm==0.3.12",
     "pillow",
     "pydantic",
     "duckdb",
-    "mlx-lm>=0.3.4",
+    "mlx-lm==0.30.7",
     "python-dotenv",
-    "torchvision"
+    "torchvision",
 ]
 
 [build-system]
