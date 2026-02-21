@@ -4,7 +4,7 @@ import hashlib
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
 
-from tools.tool_definitions import get_tool_definitions
+from tools.tool_definitions import get_tool_definitions, perform_research_tool_name
 
 AGENT_GENERAL = "general"
 AGENT_MEMORY_MANAGER = "memory_manager"
@@ -104,6 +104,9 @@ def get_agent_profile(agent_id: Optional[str]) -> AgentProfile:
                 TOOL_PERFORM_RESEARCH,
                 TOOL_GET_FULL_TOPIC_DETAILS,
             },
+            system_instructions=(
+                f"Always cite the article ID when providing information from `{perform_research_tool_name}`. Only include information that can be found within the article. If the article does not contain the information, do not include it in your response."
+            )
         ),
         AGENT_MEMORY_MANAGER: AgentProfile(
             agent_id=AGENT_MEMORY_MANAGER,
