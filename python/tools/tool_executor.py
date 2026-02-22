@@ -2,7 +2,7 @@ import subprocess
 import re
 import json
 import logging
-from typing import Any, Dict, NamedTuple, Optional, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from offline_wikipedia_service import offline_wikipedia_service
 from tools.tool_definitions import get_full_topic_details_tool_name, perform_research_tool_name
@@ -31,9 +31,22 @@ _ARGUMENT_PATTERN = re.compile(
     r"<arg_key>(?P<key>.*?)</arg_key>[\s\r\n]*<arg_value>(?P<value>.*?)</arg_value>",
     re.DOTALL,
 )
+_FUNCTION_PATTERN = re.compile(r"<function\s*=\s*(?P<quote>\"?)(?P<name>[^\">\s]+)(?P=quote)\s*>", re.IGNORECASE)
+_PARAMETER_PATTERN = re.compile(
+    r"<parameter\s*=\s*(?P<quote>\"?)(?P<key>[^\">\s]+)(?P=quote)\s*>(?P<value>.*?)"
+    r"</parameter(?:\s*=\s*(?P<end_quote>\"?)(?P<end_key>[^\">\s]+)(?P=end_quote)\s*)?\s*>",
+    re.DOTALL | re.IGNORECASE,
+)
 
 
 def parse_tool_call(response_text: str) -> ToolCall:
+    parsed_calls = parse_tool_calls(response_text)
+    if len(parsed_calls) > 1:
+        logger.debug("Multiple <tool_call> blocks detected; using the first occurrence")
+    return parsed_calls[0]
+
+
+def parse_tool_calls(response_text: str) -> List[ToolCall]:
     if not isinstance(response_text, str):
         raise ToolCallParseError("Response text must be a string")
 
@@ -44,19 +57,32 @@ def parse_tool_call(response_text: str) -> ToolCall:
     if not matches:
         raise ToolCallParseError("Missing <tool_call> block")
 
-    if len(matches) > 1:
-        logger.debug("Multiple <tool_call> blocks detected; using the first occurrence")
+    parsed_calls: List[ToolCall] = []
+    for index, match in enumerate(matches):
+        body = match.group("body").strip()
+        if not body:
+            raise ToolCallParseError(f"Empty <tool_call> block at index {index}")
+        parsed_calls.append(_parse_tool_call_body(body))
 
-    body = matches[0].group("body").strip()
-    if not body:
-        raise ToolCallParseError("Empty <tool_call> block")
+    return parsed_calls
 
+
+def _parse_tool_call_body(body: str) -> ToolCall:
     first_line = _first_non_empty_line(body)
     if not first_line:
         raise ToolCallParseError("Tool call block contains no content")
 
     if _looks_like_json(first_line):
         return _parse_json_tool_call(body)
+
+    function_name = _parse_function_name(body)
+    if function_name:
+        arguments = _parse_parameter_pairs(body)
+        if not arguments:
+            arguments, inferred_name = _parse_embedded_arguments(body)
+            if inferred_name:
+                function_name = inferred_name.strip()
+        return ToolCall(function_name, arguments)
 
     tool_name = first_line.strip()
     arguments = _parse_argument_pairs(body)
@@ -126,6 +152,27 @@ def _parse_argument_pairs(body: str) -> Dict[str, Any]:
 
         arguments[key] = _coerce_argument_value(raw_value)
 
+    return arguments
+
+
+def _parse_function_name(body: str) -> Optional[str]:
+    match = _FUNCTION_PATTERN.search(body)
+    if not match:
+        return None
+    tool_name = match.group("name").strip()
+    return tool_name if tool_name else None
+
+
+def _parse_parameter_pairs(body: str) -> Dict[str, Any]:
+    arguments: Dict[str, Any] = {}
+    for match in _PARAMETER_PATTERN.finditer(body):
+        key = (match.group("key") or "").strip()
+        if not key:
+            continue
+        raw_value = match.group("value")
+        if raw_value is None:
+            continue
+        arguments[key] = _coerce_argument_value(raw_value)
     return arguments
 
 

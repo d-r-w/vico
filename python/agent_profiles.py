@@ -75,7 +75,7 @@ def build_tool_usage_prompt(
             "You are an agent orchestrator with access to subagents. Delegate to these agents to materially improve response quality.",
             "",
             "Rules:",
-            "- Call subagents sequentially; do not batch multiple <tool_call> blocks in one message.",
+            "- Call subagents sequentially; do not batch multiple <tool_call> blocks or <function> blocks in one message.",
             "- Subagents do not persist context between calls; each call is a new context. It is vital to provide the subagent with sufficient context to complete the task.",
             "- Use simple, minimal arguments that match the tool schema.",
             "- After receiving <tool_call_results> (the subagent response), continue the task; do not repeat the same call without a new reason.",

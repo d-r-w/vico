@@ -35,7 +35,7 @@ from agent_profiles import (
     get_agent_profile,
     get_specialized_agent_profiles,
 )
-from tools.tool_executor import execute_tool_call, parse_tool_call, ToolCallParseError
+from tools.tool_executor import execute_tool_call, parse_tool_calls, ToolCallParseError
 
 load_dotenv()
 
@@ -723,30 +723,11 @@ def run_streaming_generation_loop(
             else:
                 logger.info(f"[{tool_name}] Tool call detected")
                 try:
-                    tool_call = parse_tool_call(clean_text)
+                    tool_calls = parse_tool_calls(clean_text)
                 except ToolCallParseError as exc:
                     logger.warning(f"[{tool_name}] Tool call parsing failed: {exc.message}")
                     append_tool_result(messages, "error", f"Tool call parsing failed: {exc.message}")
                 else:
-                    t_name, t_args = tool_call
-                    if t_name not in agent_profile.allowed_tool_names:
-                        tool_result = (
-                            f"Error: Tool `{t_name}` is not permitted for this agent. "
-                            f"Allowed tools: {', '.join(sorted(agent_profile.allowed_tool_names)) if agent_profile.allowed_tool_names else '(none)'}"
-                        )
-                        append_tool_result(messages, t_name, tool_result)
-                        yield make_assistant_tool_call_start_event(t_name, t_args)
-                        yield make_assistant_tool_call_end_event(t_name, clean_tool_output_for_event(tool_result))
-                        prompt = tokenizer.apply_chat_template(messages, tools, add_generation_prompt=True, tokenize=False)
-                        continue
-                    if on_tool_call_start is not None:
-                        try:
-                            on_tool_call_start(t_name, t_args)
-                        except Exception as e:
-                            logger.warning(f"[{tool_name}] on_tool_call_start callback error: {e}")
-
-                    yield make_assistant_tool_call_start_event(t_name, t_args)
-
                     handler: ToolCallHandler = tool_call_handler or build_agent_tool_call_handler(
                         parent_label=tool_name,
                         model_name=model_name,
@@ -754,25 +735,44 @@ def run_streaming_generation_loop(
                         tokenizer=tokenizer
                     )
 
-                    try:
-                        outcome = handler(t_name, t_args, clean_text)
-                    except Exception as e:
-                        logger.error(f"[{tool_name}] Tool call handler error: {e}")
-                        outcome = ToolCallOutcome(stream=None, result_supplier=lambda: "")
+                    for t_name, t_args in tool_calls:
+                        if t_name not in agent_profile.allowed_tool_names:
+                            tool_result = (
+                                f"Error: Tool `{t_name}` is not permitted for this agent. "
+                                f"Allowed tools: {', '.join(sorted(agent_profile.allowed_tool_names)) if agent_profile.allowed_tool_names else '(none)'}"
+                            )
+                            append_tool_result(messages, t_name, tool_result)
+                            yield make_assistant_tool_call_start_event(t_name, t_args)
+                            yield make_assistant_tool_call_end_event(t_name, clean_tool_output_for_event(tool_result))
+                            continue
 
-                    if outcome.stream is not None:
-                        yield from outcome.stream
+                        if on_tool_call_start is not None:
+                            try:
+                                on_tool_call_start(t_name, t_args)
+                            except Exception as e:
+                                logger.warning(f"[{tool_name}] on_tool_call_start callback error: {e}")
 
-                    tool_result = outcome.result_supplier()
-                    append_tool_result(messages, t_name, tool_result)
+                        yield make_assistant_tool_call_start_event(t_name, t_args)
 
-                    if on_tool_call_end is not None:
                         try:
-                            on_tool_call_end(t_name, tool_result)
+                            outcome = handler(t_name, t_args, clean_text)
                         except Exception as e:
-                            logger.warning(f"[{tool_name}] on_tool_call_end callback error: {e}")
+                            logger.error(f"[{tool_name}] Tool call handler error: {e}")
+                            outcome = ToolCallOutcome(stream=None, result_supplier=lambda: "")
 
-                    yield make_assistant_tool_call_end_event(t_name, clean_tool_output_for_event(tool_result))
+                        if outcome.stream is not None:
+                            yield from outcome.stream
+
+                        tool_result = outcome.result_supplier()
+                        append_tool_result(messages, t_name, tool_result)
+
+                        if on_tool_call_end is not None:
+                            try:
+                                on_tool_call_end(t_name, tool_result)
+                            except Exception as e:
+                                logger.warning(f"[{tool_name}] on_tool_call_end callback error: {e}")
+
+                        yield make_assistant_tool_call_end_event(t_name, clean_tool_output_for_event(tool_result))
 
             prompt = tokenizer.apply_chat_template(messages, tools, add_generation_prompt=True, tokenize=False)
             continue
