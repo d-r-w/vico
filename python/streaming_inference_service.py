@@ -90,7 +90,11 @@ class LMModelLoader(ModelLoader):
 
     def load_model(self, model_name: str) -> Tuple[Any, Any]:
         logger.info(f"Loading LM model: {model_name}...")
-        model, tokenizer = lm_load(model_name)
+        load_result = lm_load(model_name)
+        if len(load_result) == 2:
+            model, tokenizer = load_result
+        else:
+            model, tokenizer, _ = load_result
         logger.info(f"LM Model {model_name} loaded successfully.")
         return (model, tokenizer)
 
@@ -271,6 +275,24 @@ ToolCallHandler = Callable[[str, Dict[str, Any], str], ToolCallOutcome]
 class ToolCallTagScan(NamedTuple):
     has_open: bool
     has_close: bool
+    has_function_call: bool
+
+_SSE_EVENT_SOURCE_BY_TYPE: Dict[str, str] = {
+    "assistant_token": "assistant",
+    "thinking_token": "assistant_thinking",
+    "thinking_complete": "assistant_thinking",
+    "subagent_token": "subagent",
+    "subagent_thinking_token": "subagent_thinking",
+    "subagent_thinking_complete": "subagent_thinking",
+}
+
+def _event_source_for_type(event_type: str) -> str:
+    """Map SSE event types to a UI-friendly source label."""
+    if event_type.startswith("assistant_tool_call_"):
+        return "assistant_tool"
+    if event_type.startswith("subagent_tool_call_"):
+        return "subagent_tool"
+    return _SSE_EVENT_SOURCE_BY_TYPE.get(event_type, "system")
 
 def make_sse(event_type: str, payload: Optional[Dict[str, Any]] = None) -> str:
     """Format an SSE event string."""
@@ -278,9 +300,17 @@ def make_sse(event_type: str, payload: Optional[Dict[str, Any]] = None) -> str:
         body: Dict[str, Any] = {"type": event_type}
         if payload:
             body.update(payload)
+        if "source" not in body:
+            body["source"] = _event_source_for_type(event_type)
         return f"data: {json.dumps(body, ensure_ascii=False)}\n\n"
     except Exception as e:
         return f"data: {json.dumps({'type': 'error', 'message': f'encoding failure: {e}'})}\n\n"
+
+def make_assistant_tool_call_start_event(tool_name: str, tool_input: Dict[str, Any]) -> str:
+    return make_sse("assistant_tool_call_start", {"tool_name": tool_name, "input": tool_input})
+
+def make_assistant_tool_call_end_event(tool_name: str, tool_output: Any) -> str:
+    return make_sse("assistant_tool_call_end", {"tool_name": tool_name, "output": tool_output})
 
 def strip_think_blocks(text: str) -> str:
     """Remove content within <think>...</think> tags."""
@@ -301,10 +331,11 @@ def extract_think_content(text: str) -> str:
 
 
 def scan_tool_call_tags(text: str) -> ToolCallTagScan:
-    """Scan text for <tool_call> and </tool_call> tags."""
+    """Scan text for <tool_call> tags and function-style calls."""
     open_tag = "<tool_call>"
     close_tag = "</tool_call>"
     open_len = len(open_tag)
+    has_function_call = "<function=" in text.lower()
 
     has_open = False
     index = 0
@@ -316,10 +347,10 @@ def scan_tool_call_tags(text: str) -> ToolCallTagScan:
             index += open_len
             continue
         if text.startswith(close_tag, index):
-            return ToolCallTagScan(has_open, True)
+            return ToolCallTagScan(has_open, True, has_function_call)
         index += 1
 
-    return ToolCallTagScan(has_open, False)
+    return ToolCallTagScan(has_open, False, has_function_call)
 
 
 def is_qwen3_thinking_model(model_name: str) -> bool:
@@ -685,8 +716,8 @@ def run_streaming_generation_loop(
         clean_text = strip_think_blocks(response_text)
         tag_scan = scan_tool_call_tags(clean_text)
 
-        if tag_scan.has_close:
-            if not tag_scan.has_open:
+        if tag_scan.has_close or tag_scan.has_function_call:
+            if tag_scan.has_close and not tag_scan.has_open and not tag_scan.has_function_call:
                 append_tool_result(messages, "error", "Tool call syntax error: opening <tool_call> tag not found.")
                 logger.warning(f"[{tool_name}] Tool call detected but no <tool_call> tag found")
             else:
@@ -704,14 +735,8 @@ def run_streaming_generation_loop(
                             f"Allowed tools: {', '.join(sorted(agent_profile.allowed_tool_names)) if agent_profile.allowed_tool_names else '(none)'}"
                         )
                         append_tool_result(messages, t_name, tool_result)
-                        try:
-                            yield make_sse("assistant_tool_call_start", {"tool_name": t_name, "input": t_args})
-                            yield make_sse(
-                                "assistant_tool_call_end",
-                                {"tool_name": t_name, "output": clean_tool_output_for_event(tool_result)},
-                            )
-                        except Exception:
-                            pass
+                        yield make_assistant_tool_call_start_event(t_name, t_args)
+                        yield make_assistant_tool_call_end_event(t_name, clean_tool_output_for_event(tool_result))
                         prompt = tokenizer.apply_chat_template(messages, tools, add_generation_prompt=True, tokenize=False)
                         continue
                     if on_tool_call_start is not None:
@@ -720,10 +745,7 @@ def run_streaming_generation_loop(
                         except Exception as e:
                             logger.warning(f"[{tool_name}] on_tool_call_start callback error: {e}")
 
-                    try:
-                        yield make_sse("assistant_tool_call_start", {"tool_name": t_name, "input": t_args})
-                    except Exception:
-                        pass
+                    yield make_assistant_tool_call_start_event(t_name, t_args)
 
                     handler: ToolCallHandler = tool_call_handler or build_agent_tool_call_handler(
                         parent_label=tool_name,
@@ -750,13 +772,7 @@ def run_streaming_generation_loop(
                         except Exception as e:
                             logger.warning(f"[{tool_name}] on_tool_call_end callback error: {e}")
 
-                    try:
-                        yield make_sse("assistant_tool_call_end", {
-                            "tool_name": t_name,
-                            "output": clean_tool_output_for_event(tool_result),
-                        })
-                    except Exception:
-                        pass
+                    yield make_assistant_tool_call_end_event(t_name, clean_tool_output_for_event(tool_result))
 
             prompt = tokenizer.apply_chat_template(messages, tools, add_generation_prompt=True, tokenize=False)
             continue

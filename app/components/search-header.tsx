@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef } from "react";
-import { Mode } from "@/app/types";
+import { Mode, StreamEventItem } from "@/app/types";
 import { SearchInput, SearchInputHandle } from "@/app/components/search-input";
 import { ThemeToggle } from "@/app/components/theme-toggle";
 import { ModeToggle } from "@/app/components/mode-toggle";
@@ -20,6 +20,8 @@ interface SearchHeaderProps {
   onSubagentTokenReceived?: (assistantName: string, token: string) => void;
   onSubagentToolCallStart?: (parentToolName: string, toolName: string, input?: unknown) => void;
   onSubagentToolCallEnd?: (parentToolName: string, toolName: string, output?: unknown) => void;
+  onStreamEvent?: (event: StreamEventItem) => void;
+  onStreamingStateChange?: (isStreaming: boolean) => void;
   onToggleSidebar?: () => void;
 }
 
@@ -35,6 +37,8 @@ export function SearchHeader({
   onSubagentTokenReceived,
   onSubagentToolCallStart,
   onSubagentToolCallEnd,
+  onStreamEvent,
+  onStreamingStateChange,
   onToggleSidebar,
 }: SearchHeaderProps) {
   const searchInputRef = useRef<SearchInputHandle>(null);
@@ -73,6 +77,8 @@ export function SearchHeader({
               onSubagentTokenReceived={onSubagentTokenReceived}
               onSubagentToolCallStart={onSubagentToolCallStart}
               onSubagentToolCallEnd={onSubagentToolCallEnd}
+              onStreamEvent={onStreamEvent}
+              onStreamingStateChange={onStreamingStateChange}
             />
           </div>
         </div>

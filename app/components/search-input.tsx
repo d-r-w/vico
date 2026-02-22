@@ -4,7 +4,7 @@ import { useState, useRef, forwardRef, useImperativeHandle, useEffect, useCallba
 import { useRouter } from "next/navigation";
 
 import { Input } from "@/components/ui/input";
-import { Mode, MODES, SSEEvent } from "@/app/types";
+import { Mode, MODES, SSEEvent, StreamEventItem } from "@/app/types";
 import { Loader2 } from "lucide-react";
 
 interface SearchInputProps {
@@ -18,6 +18,8 @@ interface SearchInputProps {
   onSubagentTokenReceived?: (assistantName: string, token: string) => void;
   onSubagentToolCallStart?: (parentToolName: string, toolName: string, input?: unknown) => void;
   onSubagentToolCallEnd?: (parentToolName: string, toolName: string, output?: unknown) => void;
+  onStreamEvent?: (event: StreamEventItem) => void;
+  onStreamingStateChange?: (isStreaming: boolean) => void;
 }
 
 export interface SearchInputHandle {
@@ -36,6 +38,8 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
     onSubagentTokenReceived,
     onSubagentToolCallStart,
     onSubagentToolCallEnd,
+    onStreamEvent,
+    onStreamingStateChange,
   }, ref) => {
     const [search, setSearch] = useState(initialSearch);
     const router = useRouter();
@@ -109,6 +113,7 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
       if (mode === MODES.CHAT || mode === MODES.AGENT) {
         try {
           setIsLoading(true);
+          onStreamingStateChange?.(true);
           currentResponseRef.current = '';
           onResponseReceived?.('');
           
@@ -130,7 +135,111 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
           let accumulatedResponse = '';
           let buffer = '';
           let eventBuffer: string[] = [];
-          
+          let eventSequence = 0;
+
+          const publishStreamEvent = (eventData: SSEEvent, token: string, label: string) => {
+            if (!token) {
+              return;
+            }
+            eventSequence += 1;
+            onStreamEvent?.({
+              id: `stream-event-${Date.now()}-${eventSequence}`,
+              source: eventData.source,
+              label,
+              token,
+              timestamp: Date.now(),
+            });
+          };
+
+          const dispatchEvent = (eventData: SSEEvent): "continue" | "end" => {
+            switch (eventData.type) {
+              case 'assistant_token': {
+                accumulatedResponse += eventData.token;
+                scheduleResponseUpdate(accumulatedResponse);
+                publishStreamEvent(eventData, eventData.token, "Assistant");
+                return "continue";
+              }
+              case 'thinking_token': {
+                onThinkingTokenReceived?.("Assistant", eventData.token);
+                publishStreamEvent(eventData, eventData.token, "Assistant Thinking");
+                return "continue";
+              }
+              case 'thinking_complete': {
+                onThinkingComplete?.("Assistant");
+                return "continue";
+              }
+              case 'subagent_thinking_token': {
+                onThinkingTokenReceived?.(eventData.tool_name, eventData.token);
+                publishStreamEvent(eventData, eventData.token, `Thinking • ${eventData.tool_name}`);
+                return "continue";
+              }
+              case 'subagent_thinking_complete': {
+                onThinkingComplete?.(eventData.tool_name);
+                return "continue";
+              }
+              case 'subagent_token': {
+                onSubagentTokenReceived?.(eventData.tool_name, eventData.token);
+                publishStreamEvent(eventData, eventData.token, `Subagent • ${eventData.tool_name}`);
+                return "continue";
+              }
+              case 'assistant_tool_call_start':
+              case 'subagent_tool_call_start':
+                if (eventData.type === 'subagent_tool_call_start') {
+                  onSubagentToolCallStart?.(
+                    eventData.parent_tool_name,
+                    eventData.tool_name,
+                    eventData.input
+                  );
+                } else {
+                  onToolCallStart?.(eventData.tool_name, eventData.input);
+                }
+                return "continue";
+              case 'assistant_tool_call_end':
+              case 'subagent_tool_call_end':
+                if (eventData.type === 'subagent_tool_call_end') {
+                  onSubagentToolCallEnd?.(
+                    eventData.parent_tool_name,
+                    eventData.tool_name,
+                    eventData.output
+                  );
+                  if (typeof eventData.output === "string" && eventData.output.trim().length > 0) {
+                    publishStreamEvent(
+                      eventData,
+                      eventData.output,
+                      `Tool Result • ${eventData.tool_name}`
+                    );
+                  }
+                } else {
+                  onToolCallEnd?.(eventData.tool_name, eventData.output);
+                  if (typeof eventData.output === "string" && eventData.output.trim().length > 0) {
+                    publishStreamEvent(eventData, eventData.output, `Tool Result • ${eventData.tool_name}`);
+                  }
+                }
+                return "continue";
+              case 'end': {
+                setIsLoading(false);
+                onStreamingStateChange?.(false);
+                flushPendingResponse();
+                return "end";
+              }
+              case 'error': {
+                throw new Error(eventData.message);
+              }
+              default:
+                return "continue";
+            }
+          };
+
+          const processCompletedEvent = (eventPayload: string): "continue" | "end" => {
+            try {
+              const eventData: SSEEvent = JSON.parse(eventPayload);
+              return dispatchEvent(eventData);
+            } catch (parseError) {
+              console.warn('Failed to parse SSE event:', eventPayload, parseError);
+              return "continue";
+            }
+          };
+
           while (true) {
             const { done, value } = await reader.read();
 
@@ -159,137 +268,29 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
                 if (eventBuffer.length === 0) continue;
                 const eventPayload = eventBuffer.join('\n');
                 eventBuffer = [];
-
-                try {
-                  const eventData: SSEEvent = JSON.parse(eventPayload);
-
-                  switch (eventData.type) {
-                    case 'assistant_token': {
-                      accumulatedResponse += eventData.token;
-                      scheduleResponseUpdate(accumulatedResponse);
-                      break;
-                    }
-                    case 'thinking_token': {
-                      onThinkingTokenReceived?.("Assistant", eventData.token);
-                      break;
-                    }
-                    case 'thinking_complete': {
-                      onThinkingComplete?.("Assistant");
-                      break;
-                    }
-                    case 'subagent_thinking_token': {
-                      onThinkingTokenReceived?.(eventData.tool_name, eventData.token);
-                      break;
-                    }
-                    case 'subagent_thinking_complete': {
-                      onThinkingComplete?.(eventData.tool_name);
-                      break;
-                    }
-                    case 'subagent_token': {
-                      onSubagentTokenReceived?.(eventData.tool_name, eventData.token);
-                      break;
-                    }
-                    case 'assistant_tool_call_start':
-                    case 'subagent_tool_call_start':
-                    case 'tool_call_start': // legacy
-                      if (eventData.type === 'subagent_tool_call_start') {
-                        onSubagentToolCallStart?.(
-                          eventData.parent_tool_name,
-                          eventData.tool_name,
-                          eventData.input
-                        );
-                      } else {
-                        onToolCallStart?.(eventData.tool_name, eventData.input);
-                      }
-                      break;
-                    case 'assistant_tool_call_end':
-                    case 'subagent_tool_call_end':
-                    case 'tool_call_end': // legacy
-                      if (eventData.type === 'subagent_tool_call_end') {
-                        onSubagentToolCallEnd?.(
-                          eventData.parent_tool_name,
-                          eventData.tool_name,
-                          eventData.output
-                        );
-                      } else {
-                        onToolCallEnd?.(eventData.tool_name, eventData.output);
-                      }
-                      break;
-                    case 'end': {
-                      setIsLoading(false);
-                      flushPendingResponse();
-                      return;
-                    }
-                    case 'error': {
-                      throw new Error(eventData.message);
-                    }
-                    default:
-                      break;
-                  }
-                } catch (parseError) {
-                  console.warn('Failed to parse SSE event:', eventPayload, parseError);
+                const status = processCompletedEvent(eventPayload);
+                if (status === "end") {
+                  return;
                 }
               }
             }
 
             if (done) {
+              const trailingLine = buffer.replace(/\r$/, '');
+              if (trailingLine.startsWith('data:')) {
+                const jsonChunk = trailingLine.slice(5).trimStart();
+                if (jsonChunk) {
+                  eventBuffer.push(jsonChunk);
+                }
+              }
+
               // Flush any buffered event in case the stream ended without a trailing blank line
               if (eventBuffer.length > 0) {
                 const eventPayload = eventBuffer.join('\n');
                 eventBuffer = [];
-                try {
-                  const eventData: SSEEvent = JSON.parse(eventPayload);
-                  switch (eventData.type) {
-                    case 'assistant_token':
-                      accumulatedResponse += eventData.token;
-                      scheduleResponseUpdate(accumulatedResponse);
-                      break;
-                    case 'thinking_token':
-                      onThinkingTokenReceived?.("Assistant", eventData.token);
-                      break;
-                    case 'thinking_complete':
-                      onThinkingComplete?.("Assistant");
-                      break;
-                    case 'subagent_thinking_token':
-                      onThinkingTokenReceived?.(eventData.tool_name, eventData.token);
-                      break;
-                    case 'subagent_thinking_complete':
-                      onThinkingComplete?.(eventData.tool_name);
-                      break;
-                    case 'subagent_token':
-                      onSubagentTokenReceived?.(eventData.tool_name, eventData.token);
-                      break;
-                    case 'tool_call_start':
-                      onToolCallStart?.(eventData.tool_name, eventData.input);
-                      break;
-                    case 'tool_call_end':
-                      onToolCallEnd?.(eventData.tool_name, eventData.output);
-                      break;
-                    case 'subagent_tool_call_start':
-                      onSubagentToolCallStart?.(
-                        eventData.parent_tool_name,
-                        eventData.tool_name,
-                        eventData.input
-                      );
-                      break;
-                    case 'subagent_tool_call_end':
-                      onSubagentToolCallEnd?.(
-                        eventData.parent_tool_name,
-                        eventData.tool_name,
-                        eventData.output
-                      );
-                      break;
-                    case 'end':
-                      setIsLoading(false);
-                      flushPendingResponse();
-                      break;
-                    case 'error':
-                      throw new Error(eventData.message);
-                    default:
-                      break;
-                  }
-                } catch (parseError) {
-                  console.warn('Failed to parse trailing SSE event:', eventPayload, parseError);
+                const status = processCompletedEvent(eventPayload);
+                if (status === "end") {
+                  break;
                 }
               }
               break;
@@ -299,6 +300,7 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
           console.error('Failed to probe memories:', error);
           onResponseReceived?.('Error: Failed to retrieve response');
         } finally {
+          onStreamingStateChange?.(false);
           cancelScheduledResponse();
           setIsLoading(false);
         }

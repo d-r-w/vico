@@ -44,18 +44,33 @@ export interface ToolCallState {
   subagent?: SubagentState;
 }
 
+export type StreamSource =
+  | "assistant"
+  | "assistant_thinking"
+  | "subagent"
+  | "subagent_thinking"
+  | "assistant_tool"
+  | "subagent_tool"
+  | "system";
+
+export interface StreamEventItem {
+  id: string;
+  source: StreamSource;
+  label: string;
+  token: string;
+  timestamp: number;
+}
+
 export type SSEEvent =
-  | { type: "assistant_token"; token: string }
-  | { type: "thinking_token"; token: string }
-  | { type: "thinking_complete" }
-  | { type: "subagent_thinking_token"; tool_name: string; token: string }
-  | { type: "subagent_thinking_complete"; tool_name: string }
-  | { type: "subagent_token"; tool_name: string; token: string }
-  | { type: "tool_call_start"; tool_name: string; input?: unknown } // legacy
-  | { type: "tool_call_end"; tool_name: string; output?: unknown } // legacy
-  | { type: "assistant_tool_call_start"; tool_name: string; input?: unknown }
-  | { type: "assistant_tool_call_end"; tool_name: string; output?: unknown }
-  | { type: "subagent_tool_call_start"; parent_tool_name: string; tool_name: string; input?: unknown }
-  | { type: "subagent_tool_call_end"; parent_tool_name: string; tool_name: string; output?: unknown }
-  | { type: "end" }
-  | { type: "error"; message: string };
+  | { type: "assistant_token"; token: string; source: StreamSource }
+  | { type: "thinking_token"; token: string; source: StreamSource }
+  | { type: "thinking_complete"; source: StreamSource }
+  | { type: "subagent_thinking_token"; tool_name: string; token: string; source: StreamSource }
+  | { type: "subagent_thinking_complete"; tool_name: string; source: StreamSource }
+  | { type: "subagent_token"; tool_name: string; token: string; source: StreamSource }
+  | { type: "assistant_tool_call_start"; tool_name: string; input?: unknown; source: StreamSource }
+  | { type: "assistant_tool_call_end"; tool_name: string; output?: unknown; source: StreamSource }
+  | { type: "subagent_tool_call_start"; parent_tool_name: string; tool_name: string; input?: unknown; source: StreamSource }
+  | { type: "subagent_tool_call_end"; parent_tool_name: string; tool_name: string; output?: unknown; source: StreamSource }
+  | { type: "end"; source: StreamSource }
+  | { type: "error"; message: string; source: StreamSource };

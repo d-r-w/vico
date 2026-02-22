@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { MODES, Mode, ThinkingBlock, SubagentState, ToolCallState } from "@/app/types";
+import { MODES, Mode, ThinkingBlock, StreamEventItem, SubagentState, ToolCallState } from "@/app/types";
 import { ResponseDisplay } from "@/app/components/response-display";
 import { SearchHeader } from "@/app/components/search-header";
 
@@ -15,6 +15,8 @@ export function ClientWrapper({ initialSearch, onToggleSidebar }: ClientWrapperP
   const [mode, setMode] = useState<Mode>(MODES.SEARCH);
   const [assistantThinking, setAssistantThinking] = useState<ThinkingBlock[]>([]);
   const [toolCalls, setToolCalls] = useState<ToolCallState[]>([]);
+  const [streamEvents, setStreamEvents] = useState<StreamEventItem[]>([]);
+  const [isStreaming, setIsStreaming] = useState(false);
   const toolCallIdRef = useRef(0);
 
   const findLastIndex = <T,>(arr: T[], predicate: (value: T, index: number) => boolean) => {
@@ -34,6 +36,8 @@ export function ClientWrapper({ initialSearch, onToggleSidebar }: ClientWrapperP
   const resetConversationState = () => {
     setAssistantThinking([]);
     setToolCalls([]);
+    setStreamEvents([]);
+    setIsStreaming(false);
   };
 
   const appendThinkingToken = (blocks: ThinkingBlock[], token: string): ThinkingBlock[] => {
@@ -244,6 +248,14 @@ export function ClientWrapper({ initialSearch, onToggleSidebar }: ClientWrapperP
     }
   };
 
+  const handleStreamEvent = (event: StreamEventItem) => {
+    setStreamEvents(prev => [...prev, event]);
+  };
+
+  const handleStreamingStateChange = (value: boolean) => {
+    setIsStreaming(value);
+  };
+
   return (
     <div className="flex flex-col h-full">
       <SearchHeader 
@@ -258,15 +270,17 @@ export function ClientWrapper({ initialSearch, onToggleSidebar }: ClientWrapperP
         onSubagentTokenReceived={handleSubagentToken}
         onSubagentToolCallStart={handleSubagentToolCallStart}
         onSubagentToolCallEnd={handleSubagentToolCallEnd}
+        onStreamEvent={handleStreamEvent}
+        onStreamingStateChange={handleStreamingStateChange}
         onToggleSidebar={onToggleSidebar}
       />
       <div className="container mx-auto px-3 flex-1 flex flex-col h-[calc(100%-3.5rem)] pb-3">
-        {response || assistantThinking.length > 0 || toolCalls.length > 0 ? (
+        {response || assistantThinking.length > 0 || toolCalls.length > 0 || streamEvents.length > 0 || isStreaming ? (
           <div className="h-full flex-1">
             <ResponseDisplay 
               content={response} 
-              assistantThinking={assistantThinking}
-              toolCalls={toolCalls}
+              streamEvents={streamEvents}
+              isStreaming={isStreaming}
             />
           </div>
         ) : (
