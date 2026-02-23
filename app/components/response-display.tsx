@@ -32,6 +32,7 @@ const TOOL_REQUEST_BADGE_CLASS =
   "border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-100";
 const TOOL_RESULT_BADGE_CLASS =
   "border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-100";
+const DISCLOSURE_HINT_CLASS = "text-[11px] font-medium uppercase tracking-wide text-zinc-400";
 
 const sourceTone: Record<StreamSource, { badge: string; label: string }> = {
   assistant: {
@@ -146,7 +147,7 @@ const StreamActivityPanel = ({
           </p>
         )
       ) : (
-        <div className="space-y-2">
+        <div className="space-y-1">
           {segments.map((segment, index) => {
             const tone = sourceTone[segment.source];
             const isLastSegment = index === segments.length - 1;
@@ -166,7 +167,7 @@ const StreamActivityPanel = ({
                   <details className="space-y-1">
                     <summary className="flex cursor-pointer list-none items-center gap-2">
                       {badgeNode}
-                      <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-400">
+                      <span className={DISCLOSURE_HINT_CLASS}>
                         See results
                       </span>
                     </summary>
@@ -181,56 +182,56 @@ const StreamActivityPanel = ({
                     </div>
                   </details>
                 ) : hasToolCallBlocks ? (
-                  <>
+                  <div className="space-y-1">
                     {badgeNode}
-                  <div className="space-y-2">
-                    {toolCallBlocks.map((block, blockIndex) => {
-                      const preview = parseToolCallPreview(block);
-                      const hasParams = preview.params.length > 0;
-                      return (
-                        <details
-                          key={`${segment.id}-tool-call-${blockIndex}`}
-                          className="space-y-1"
-                        >
-                          <summary className="flex cursor-pointer list-none items-center gap-2">
-                            <span className={`inline-flex rounded border px-1.5 py-0.5 font-medium ${TOOL_REQUEST_BADGE_CLASS}`}>
-                              Tool Request • {preview.toolName}
-                            </span>
-                            <span className="text-[10px] font-medium uppercase tracking-wide text-zinc-500">
-                              {hasParams ? "See parameters" : "See payload"}
-                            </span>
-                          </summary>
-                          <div className="mt-2 space-y-1 rounded-md border border-zinc-700/40 bg-zinc-950/30 p-2">
-                            {hasParams ? (
-                              preview.params.map((param, paramIndex) => (
-                                <div key={`${segment.id}-param-${paramIndex}`} className="space-y-0.5">
-                                  <p className="text-[10px] font-medium uppercase tracking-wide text-zinc-500">
-                                    {param.key}
-                                  </p>
-                                  <pre className="whitespace-pre-wrap break-words text-xs leading-relaxed text-zinc-200">
-                                    {param.value}
-                                  </pre>
-                                </div>
-                              ))
-                            ) : (
-                              <pre className="whitespace-pre-wrap break-words text-xs leading-relaxed text-zinc-300">
-                                {block}
-                              </pre>
-                            )}
-                          </div>
-                        </details>
-                      );
-                    })}
-                    {isStreaming && isLastSegment ? (
-                      <span className="ml-0.5 inline-block h-3 w-1 animate-pulse rounded-sm bg-amber-500 align-middle" />
-                    ) : null}
+                    <div className="space-y-1">
+                      {toolCallBlocks.map((block, blockIndex) => {
+                        const preview = parseToolCallPreview(block);
+                        const hasParams = preview.params.length > 0;
+                        return (
+                          <details
+                            key={`${segment.id}-tool-call-${blockIndex}`}
+                            className="space-y-1"
+                          >
+                            <summary className="flex cursor-pointer list-none items-center gap-2">
+                              <span className={`inline-flex rounded border px-1.5 py-0.5 font-medium ${TOOL_REQUEST_BADGE_CLASS}`}>
+                                Tool Request • {preview.toolName}
+                              </span>
+                              <span className={DISCLOSURE_HINT_CLASS}>
+                                {hasParams ? "See parameters" : "See payload"}
+                              </span>
+                            </summary>
+                            <div className="mt-2 space-y-1 rounded-md border border-zinc-700/40 bg-zinc-950/30 p-2">
+                              {hasParams ? (
+                                preview.params.map((param, paramIndex) => (
+                                  <div key={`${segment.id}-param-${paramIndex}`} className="space-y-0.5">
+                                    <p className="text-[10px] font-medium uppercase tracking-wide text-zinc-500">
+                                      {param.key}
+                                    </p>
+                                    <pre className="whitespace-pre-wrap break-words text-xs leading-relaxed text-zinc-200">
+                                      {param.value}
+                                    </pre>
+                                  </div>
+                                ))
+                              ) : (
+                                <pre className="whitespace-pre-wrap break-words text-xs leading-relaxed text-zinc-300">
+                                  {block}
+                                </pre>
+                              )}
+                            </div>
+                          </details>
+                        );
+                      })}
+                      {isStreaming && isLastSegment ? (
+                        <span className="ml-0.5 inline-block h-3 w-1 animate-pulse rounded-sm bg-amber-500 align-middle" />
+                      ) : null}
+                    </div>
                   </div>
-                  </>
                 ) : isSubagentResponse ? (
                   <details className="space-y-1">
                     <summary className="flex cursor-pointer list-none items-center gap-2">
                       {badgeNode}
-                      <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-400">
+                      <span className={DISCLOSURE_HINT_CLASS}>
                         See subagent response
                       </span>
                     </summary>
