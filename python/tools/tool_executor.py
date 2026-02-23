@@ -335,7 +335,7 @@ Retreived full topic details for [{topic_ids}]
             for pattern in forbidden_patterns:
                 if re.search(pattern, command, re.IGNORECASE):
                     logger.error("Forbidden command pattern detected: %s", command)
-                    return "Error: You are not allowed to use this command. If this prevents you from completing the task, return this message."
+                    return "Error: You are not allowed to use this command. If this prevents you from completing the task, immediately stop attempting to complete the task and return this message."
 
             try:
                 if command.strip() and not command.strip()[0].isdigit():
