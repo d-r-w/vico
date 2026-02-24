@@ -10,6 +10,7 @@ import os
 import queue
 import re
 import threading
+from uuid import uuid4
 from concurrent.futures import Future
 from pathlib import Path
 from typing import Any, Callable, Deque, Dict, Iterable, List, NamedTuple, Optional, Set, Tuple, Union, cast
@@ -304,13 +305,14 @@ def make_sse(event_type: str, payload: Optional[Dict[str, Any]] = None) -> str:
             body["source"] = _event_source_for_type(event_type)
         return f"data: {json.dumps(body, ensure_ascii=False)}\n\n"
     except Exception as e:
-        return f"data: {json.dumps({'type': 'error', 'message': f'encoding failure: {e}'})}\n\n"
+        fallback = {"type": "error", "source": "system", "message": f"encoding failure: {e}"}
+        return f"data: {json.dumps(fallback, ensure_ascii=False)}\n\n"
 
-def make_assistant_tool_call_start_event(tool_name: str, tool_input: Dict[str, Any]) -> str:
-    return make_sse("assistant_tool_call_start", {"tool_name": tool_name, "input": tool_input})
+def make_assistant_tool_call_start_event(call_id: str, tool_name: str, tool_input: Dict[str, Any]) -> str:
+    return make_sse("assistant_tool_call_start", {"call_id": call_id, "tool_name": tool_name, "input": tool_input})
 
-def make_assistant_tool_call_end_event(tool_name: str, tool_output: Any) -> str:
-    return make_sse("assistant_tool_call_end", {"tool_name": tool_name, "output": tool_output})
+def make_assistant_tool_call_end_event(call_id: str, tool_name: str, tool_output: Any) -> str:
+    return make_sse("assistant_tool_call_end", {"call_id": call_id, "tool_name": tool_name, "output": tool_output})
 
 def strip_think_blocks(text: str) -> str:
     """Remove content within <think>...</think> tags."""
@@ -736,14 +738,15 @@ def run_streaming_generation_loop(
                     )
 
                     for t_name, t_args in tool_calls:
+                        call_id = str(uuid4())
                         if t_name not in agent_profile.allowed_tool_names:
                             tool_result = (
                                 f"Error: Tool `{t_name}` is not permitted for this agent. "
                                 f"Allowed tools: {', '.join(sorted(agent_profile.allowed_tool_names)) if agent_profile.allowed_tool_names else '(none)'}"
                             )
                             append_tool_result(messages, t_name, tool_result)
-                            yield make_assistant_tool_call_start_event(t_name, t_args)
-                            yield make_assistant_tool_call_end_event(t_name, clean_tool_output_for_event(tool_result))
+                            yield make_assistant_tool_call_start_event(call_id, t_name, t_args)
+                            yield make_assistant_tool_call_end_event(call_id, t_name, clean_tool_output_for_event(tool_result))
                             continue
 
                         if on_tool_call_start is not None:
@@ -752,7 +755,7 @@ def run_streaming_generation_loop(
                             except Exception as e:
                                 logger.warning(f"[{tool_name}] on_tool_call_start callback error: {e}")
 
-                        yield make_assistant_tool_call_start_event(t_name, t_args)
+                        yield make_assistant_tool_call_start_event(call_id, t_name, t_args)
 
                         try:
                             outcome = handler(t_name, t_args, clean_text)
@@ -772,7 +775,7 @@ def run_streaming_generation_loop(
                             except Exception as e:
                                 logger.warning(f"[{tool_name}] on_tool_call_end callback error: {e}")
 
-                        yield make_assistant_tool_call_end_event(t_name, clean_tool_output_for_event(tool_result))
+                        yield make_assistant_tool_call_end_event(call_id, t_name, clean_tool_output_for_event(tool_result))
 
             prompt = tokenizer.apply_chat_template(messages, tools, add_generation_prompt=True, tokenize=False)
             continue
@@ -977,24 +980,34 @@ class SubAgentExecutor:
             logger.warning(f"[{self._parent_label}] subagent queue enqueue error: {exc}")
 
     def _run(self) -> None:
+        pending_tool_call_ids: Dict[str, Deque[str]] = {}
+
         def on_token(text: str) -> None:
             if text:
                 self._emit_item(StreamToken(text))
 
         def on_tool_start(name: str, args: Dict[str, Any]) -> None:
+            call_id = str(uuid4())
+            pending_tool_call_ids.setdefault(name, deque()).append(call_id)
             self._emit_item(
                 StreamEvent(
                     "subagent_tool_call_start",
-                    {"tool_name": name, "input": args, "parent_tool_name": self._tool_call_name},
+                    {"call_id": call_id, "tool_name": name, "input": args, "parent_tool_name": self._tool_call_name},
                 )
             )
 
         def on_tool_end(name: str, output: Any) -> None:
             cleaned_output = clean_tool_output_for_event(output) if isinstance(output, str) else output
+            call_id = str(uuid4())
+            pending_ids = pending_tool_call_ids.get(name)
+            if pending_ids:
+                pending_call_id = pending_ids.popleft()
+                if pending_call_id:
+                    call_id = pending_call_id
             self._emit_item(
                 StreamEvent(
                     "subagent_tool_call_end",
-                    {"tool_name": name, "output": cleaned_output, "parent_tool_name": self._tool_call_name},
+                    {"call_id": call_id, "tool_name": name, "output": cleaned_output, "parent_tool_name": self._tool_call_name},
                 )
             )
 

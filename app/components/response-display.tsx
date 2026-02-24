@@ -1,6 +1,6 @@
 "use client"
 
-import { memo, useMemo } from "react"
+import { memo, useMemo, useState } from "react"
 import { Card, CardContent } from "@/components/ui/card"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { MarkdownRenderer } from "@/app/components/markdown-renderer"
@@ -32,7 +32,8 @@ const TOOL_REQUEST_BADGE_CLASS =
   "border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-100";
 const TOOL_RESULT_BADGE_CLASS =
   "border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-100";
-const DISCLOSURE_HINT_CLASS = "text-[11px] font-medium uppercase tracking-wide text-zinc-400";
+const TOOL_CALL_BADGE_CLASS =
+  "border-violet-300 bg-violet-50 text-violet-700 dark:border-violet-800 dark:bg-violet-900/30 dark:text-violet-100";
 
 const sourceTone: Record<StreamSource, { badge: string; label: string }> = {
   assistant: {
@@ -66,35 +67,99 @@ const sourceTone: Record<StreamSource, { badge: string; label: string }> = {
 };
 
 const TOOL_CALL_BLOCK_REGEX = /<tool_call>[\s\S]*?<\/tool_call>/gi;
-const TOOL_NAME_REGEX = /<function\s*=\s*("?)([^">\s]+)\1\s*>/i;
-const PARAM_REGEX = /<parameter\s*=\s*("?)([^">\s]+)\1\s*>([\s\S]*?)<\/parameter(?:\s*=\s*("?)([^">\s]+)\4\s*)?\s*>/gi;
 
-const extractToolCallBlocks = (text: string): string[] => {
-  const blocks = text.match(TOOL_CALL_BLOCK_REGEX);
-  if (!blocks) {
-    return [];
+const stripToolCallBlocks = (text: string): string => text.replace(TOOL_CALL_BLOCK_REGEX, "").trim();
+
+const formatPayloadForCodeBlock = (payload: unknown): string => {
+  if (payload == null) {
+    return "null";
   }
-  return blocks;
+  if (typeof payload === "string") {
+    return payload;
+  }
+  try {
+    return JSON.stringify(payload, null, 2);
+  } catch {
+    return String(payload);
+  }
 };
 
-const isToolResultLabel = (label: string) => label.toLowerCase().startsWith("tool result •");
+interface ToolCallEntry {
+  key: string;
+  toolName: string;
+  request: unknown;
+  response: unknown;
+}
 
-const parseToolCallPreview = (block: string): { toolName: string; params: Array<{ key: string; value: string }> } => {
-  const nameMatch = TOOL_NAME_REGEX.exec(block);
-  const toolName = nameMatch?.[2] ?? "unknown_tool";
+interface StreamSegment {
+  id: string;
+  source: StreamSource;
+  label: string;
+  text: string;
+}
 
-  const params: Array<{ key: string; value: string }> = [];
-  const paramMatches = Array.from(block.matchAll(PARAM_REGEX));
-  for (const match of paramMatches) {
-    const key = (match[2] ?? "").trim();
-    const value = (match[3] ?? "").trim();
-    if (!key || !value) {
-      continue;
-    }
-    params.push({ key, value });
-  }
+type TimelineItem =
+  | { type: "segment"; segment: StreamSegment }
+  | { type: "subagent_header"; key: string; label: string }
+  | { type: "tool"; toolKey: string };
 
-  return { toolName, params };
+const ToolCallItem = ({ entry }: { entry: ToolCallEntry }) => {
+  const [isRequestOpen, setIsRequestOpen] = useState(false);
+  const [isResponseOpen, setIsResponseOpen] = useState(false);
+  const requestText = formatPayloadForCodeBlock(entry.request);
+  const responseText = formatPayloadForCodeBlock(entry.response);
+  const hasResponse = entry.response !== undefined;
+
+  return (
+    <div className="space-y-1 text-xs">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className={`inline-flex rounded border px-1.5 py-0.5 font-medium ${TOOL_CALL_BADGE_CLASS}`}>
+          Tool Call • {entry.toolName}
+        </span>
+        <button
+          type="button"
+          onClick={() => setIsRequestOpen(prev => !prev)}
+          className={`inline-flex rounded border px-1.5 py-0.5 font-medium ${TOOL_REQUEST_BADGE_CLASS}`}
+        >
+          Request
+        </button>
+        <button
+          type="button"
+          onClick={() => setIsResponseOpen(prev => !prev)}
+          className={`inline-flex rounded border px-1.5 py-0.5 font-medium ${TOOL_RESULT_BADGE_CLASS}`}
+        >
+          Response
+        </button>
+      </div>
+      {isRequestOpen ? (
+        <div className="rounded-md border border-zinc-700/40 bg-zinc-950/30 p-2">
+          <pre className="whitespace-pre-wrap break-words text-xs leading-relaxed text-zinc-200">
+            {requestText}
+          </pre>
+        </div>
+      ) : null}
+      {isResponseOpen ? (
+        <div>
+          {hasResponse ? (
+            typeof entry.response === "string" ? (
+              <MarkdownRenderer
+                content={responseText}
+                className="prose prose-sm dark:prose-invert max-w-none"
+              />
+            ) : (
+              <pre className="whitespace-pre-wrap break-words text-xs leading-relaxed text-zinc-200">
+                {responseText}
+              </pre>
+            )
+          ) : (
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">
+              No response yet.
+            </p>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
 };
 
 const StreamActivityPanel = ({
@@ -106,36 +171,80 @@ const StreamActivityPanel = ({
   isStreaming: boolean;
   fallbackContent: string;
 }) => {
-  const segments = streamEvents.reduce<Array<{
-    id: string;
-    source: StreamSource;
-    label: string;
-    text: string;
-  }>>((acc, event) => {
-    const previous = acc[acc.length - 1];
-    if (
-      previous &&
-      previous.source === event.source &&
-      previous.label === event.label
-    ) {
-      previous.text += event.token;
-      return acc;
+  const toolEntries = new Map<string, ToolCallEntry>();
+  const timeline: TimelineItem[] = [];
+  const subagentHeadersSeen = new Set<string>();
+
+  for (const event of streamEvents) {
+    if (event.kind === "tool_call_request") {
+      const callId = event.toolCallId;
+      if (!callId) {
+        continue;
+      }
+      const toolName = event.toolName || "unknown_tool";
+      if (event.source === "subagent_tool" && event.parentToolName && !subagentHeadersSeen.has(event.parentToolName)) {
+        const headerKey = `subagent-header:${event.parentToolName}`;
+        subagentHeadersSeen.add(event.parentToolName);
+        timeline.push({
+          type: "subagent_header",
+          key: headerKey,
+          label: `Subagent • ${event.parentToolName}`,
+        });
+      }
+      const toolKey = `${event.source}:${callId}`;
+      toolEntries.set(toolKey, {
+        key: toolKey,
+        toolName,
+        request: event.payload,
+        response: undefined,
+      });
+      timeline.push({ type: "tool", toolKey });
+      continue;
     }
-    acc.push({
-      id: event.id,
-      source: event.source,
-      label: event.label || sourceTone[event.source].label,
-      text: event.token,
+
+    if (event.kind === "tool_call_response") {
+      const callId = event.toolCallId;
+      if (!callId) {
+        continue;
+      }
+      const toolKey = `${event.source}:${callId}`;
+      if (toolEntries.has(toolKey)) {
+        const existing = toolEntries.get(toolKey);
+        if (existing) {
+          existing.response = event.payload;
+        }
+      }
+      continue;
+    }
+
+    const label = event.label || sourceTone[event.source].label;
+    const text = event.token;
+    const previous = timeline[timeline.length - 1];
+    if (
+      previous?.type === "segment" &&
+      previous.segment.source === event.source &&
+      previous.segment.label === label
+    ) {
+      previous.segment.text += text;
+      continue;
+    }
+    timeline.push({
+      type: "segment",
+      segment: {
+        id: event.id,
+        source: event.source,
+        label,
+        text,
+      },
     });
-    return acc;
-  }, []);
+  }
 
   return (
     <div className="space-y-2 rounded-md border border-zinc-200 p-3 dark:border-zinc-700">
       <div className="flex items-center justify-between gap-2">
         <StreamingBadge isStreaming={isStreaming} />
       </div>
-      {segments.length === 0 ? (
+      {timeline.length === 0 ? (
         fallbackContent.trim().length > 0 ? (
           <MarkdownRenderer
             content={fallbackContent}
@@ -148,96 +257,61 @@ const StreamActivityPanel = ({
         )
       ) : (
         <div className="space-y-1">
-          {segments.map((segment, index) => {
+          {timeline.map((item, index) => {
+            const isLastSegment = index === timeline.length - 1;
+            if (item.type === "subagent_header") {
+              const subagentTone = sourceTone.subagent;
+              return (
+                <div key={item.key} className="space-y-1 text-xs">
+                  <span className={`inline-flex rounded border px-1.5 py-0.5 font-medium ${subagentTone.badge}`}>
+                    {item.label}
+                  </span>
+                  {isStreaming && isLastSegment ? (
+                    <span className="ml-0.5 inline-block h-3 w-1 animate-pulse rounded-sm bg-amber-500 align-middle" />
+                  ) : null}
+                </div>
+              );
+            }
+            if (item.type === "tool") {
+              const entry = toolEntries.get(item.toolKey);
+              if (!entry) {
+                return null;
+              }
+              return (
+                <div key={entry.key} className="space-y-1 text-xs">
+                  <ToolCallItem entry={entry} />
+                  {isStreaming && isLastSegment ? (
+                    <span className="ml-0.5 inline-block h-3 w-1 animate-pulse rounded-sm bg-amber-500 align-middle" />
+                  ) : null}
+                </div>
+              );
+            }
+
+            const segment = item.segment;
             const tone = sourceTone[segment.source];
-            const isLastSegment = index === segments.length - 1;
-            const toolCallBlocks = extractToolCallBlocks(segment.text);
-            const hasToolCallBlocks = toolCallBlocks.length > 0;
-            const isToolResult = isToolResultLabel(segment.label);
             const isSubagentResponse = segment.source === "subagent";
             const badgeNode = (
               <span className={`inline-flex rounded border px-1.5 py-0.5 font-medium ${tone.badge}`}>
                 {segment.label}
               </span>
             );
+            const cleanText = stripToolCallBlocks(segment.text);
+            if (!cleanText) {
+              return null;
+            }
 
             return (
               <div key={segment.id} className="space-y-1 text-xs">
-                {isToolResult ? (
+                {isSubagentResponse ? (
                   <details className="space-y-1">
                     <summary className="flex cursor-pointer list-none items-center gap-2">
-                      {badgeNode}
-                      <span className={DISCLOSURE_HINT_CLASS}>
-                        See results
+                      <span className={`inline-flex rounded border px-1.5 py-0.5 font-medium ${sourceTone.subagent.badge}`}>
+                        Subagent Response
                       </span>
                     </summary>
                     <div className="mt-2">
                       <MarkdownRenderer
-                        content={segment.text}
-                        className="prose prose-sm dark:prose-invert max-w-none"
-                      />
-                      {isStreaming && isLastSegment ? (
-                        <span className="ml-0.5 inline-block h-3 w-1 animate-pulse rounded-sm bg-amber-500 align-middle" />
-                      ) : null}
-                    </div>
-                  </details>
-                ) : hasToolCallBlocks ? (
-                  <div className="space-y-1">
-                    {badgeNode}
-                    <div className="space-y-1">
-                      {toolCallBlocks.map((block, blockIndex) => {
-                        const preview = parseToolCallPreview(block);
-                        const hasParams = preview.params.length > 0;
-                        return (
-                          <details
-                            key={`${segment.id}-tool-call-${blockIndex}`}
-                            className="space-y-1"
-                          >
-                            <summary className="flex cursor-pointer list-none items-center gap-2">
-                              <span className={`inline-flex rounded border px-1.5 py-0.5 font-medium ${TOOL_REQUEST_BADGE_CLASS}`}>
-                                Tool Request • {preview.toolName}
-                              </span>
-                              <span className={DISCLOSURE_HINT_CLASS}>
-                                {hasParams ? "See parameters" : "See payload"}
-                              </span>
-                            </summary>
-                            <div className="mt-2 space-y-1 rounded-md border border-zinc-700/40 bg-zinc-950/30 p-2">
-                              {hasParams ? (
-                                preview.params.map((param, paramIndex) => (
-                                  <div key={`${segment.id}-param-${paramIndex}`} className="space-y-0.5">
-                                    <p className="text-[10px] font-medium uppercase tracking-wide text-zinc-500">
-                                      {param.key}
-                                    </p>
-                                    <pre className="whitespace-pre-wrap break-words text-xs leading-relaxed text-zinc-200">
-                                      {param.value}
-                                    </pre>
-                                  </div>
-                                ))
-                              ) : (
-                                <pre className="whitespace-pre-wrap break-words text-xs leading-relaxed text-zinc-300">
-                                  {block}
-                                </pre>
-                              )}
-                            </div>
-                          </details>
-                        );
-                      })}
-                      {isStreaming && isLastSegment ? (
-                        <span className="ml-0.5 inline-block h-3 w-1 animate-pulse rounded-sm bg-amber-500 align-middle" />
-                      ) : null}
-                    </div>
-                  </div>
-                ) : isSubagentResponse ? (
-                  <details className="space-y-1">
-                    <summary className="flex cursor-pointer list-none items-center gap-2">
-                      {badgeNode}
-                      <span className={DISCLOSURE_HINT_CLASS}>
-                        See subagent response
-                      </span>
-                    </summary>
-                    <div className="mt-2">
-                      <MarkdownRenderer
-                        content={segment.text}
+                        content={cleanText}
                         className="prose prose-sm dark:prose-invert max-w-none"
                       />
                       {isStreaming && isLastSegment ? (
@@ -249,7 +323,7 @@ const StreamActivityPanel = ({
                   <div className="space-y-1">
                     {badgeNode}
                     <MarkdownRenderer
-                      content={segment.text}
+                      content={cleanText}
                       className="prose prose-sm dark:prose-invert max-w-none"
                     />
                     {isStreaming && isLastSegment ? (

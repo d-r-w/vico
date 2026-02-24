@@ -134,11 +134,63 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
           const decoder = new TextDecoder();
           let accumulatedResponse = '';
           let buffer = '';
-          let eventBuffer: string[] = [];
           let eventSequence = 0;
 
-          const publishStreamEvent = (eventData: SSEEvent, token: string, label: string) => {
-            if (!token) {
+          const getEventLabel = (eventData: SSEEvent): string => {
+            switch (eventData.type) {
+              case "assistant_token":
+                return "Assistant";
+              case "thinking_token":
+                return "Assistant Thinking";
+              case "subagent_thinking_token":
+                return `Thinking • ${eventData.tool_name}`;
+              case "subagent_token":
+                return `Subagent • ${eventData.tool_name}`;
+              case "assistant_tool_call_start":
+              case "assistant_tool_call_end":
+              case "subagent_tool_call_start":
+              case "subagent_tool_call_end":
+                return `Tool Call • ${eventData.tool_name}`;
+              default:
+                return "System";
+            }
+          };
+
+          const parseSsePayloads = (
+            currentBuffer: string,
+            flushRemainder: boolean = false
+          ): { nextBuffer: string; payloads: string[] } => {
+            const normalized = currentBuffer.replace(/\r\n/g, "\n");
+            const frames = normalized.split("\n\n");
+            const payloads: string[] = [];
+            const completeFrames = flushRemainder ? frames : frames.slice(0, -1);
+            const nextBuffer = flushRemainder ? "" : (frames[frames.length - 1] || "");
+
+            for (const frame of completeFrames) {
+              if (!frame.trim()) {
+                continue;
+              }
+              const dataLines = frame
+                .split("\n")
+                .map((line) => line.trimEnd())
+                .filter((line) => line.startsWith("data:"))
+                .map((line) => line.slice(5).trimStart())
+                .filter(Boolean);
+              if (dataLines.length > 0) {
+                payloads.push(dataLines.join("\n"));
+              }
+            }
+
+            return { nextBuffer, payloads };
+          };
+
+          const publishStreamEvent = (
+            eventData: SSEEvent,
+            token: string,
+            label: string,
+            metadata?: Partial<Pick<StreamEventItem, "kind" | "toolName" | "toolCallId" | "parentToolName" | "payload">>
+          ) => {
+            if (!token && !metadata?.kind) {
               return;
             }
             eventSequence += 1;
@@ -148,6 +200,31 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
               label,
               token,
               timestamp: Date.now(),
+              kind: metadata?.kind ?? "default",
+              toolName: metadata?.toolName,
+              toolCallId: metadata?.toolCallId,
+              parentToolName: metadata?.parentToolName,
+              payload: metadata?.payload,
+            });
+          };
+
+          const publishToolLifecycleEvent = (
+            eventData:
+              | Extract<SSEEvent, { type: "assistant_tool_call_start" }>
+              | Extract<SSEEvent, { type: "assistant_tool_call_end" }>
+              | Extract<SSEEvent, { type: "subagent_tool_call_start" }>
+              | Extract<SSEEvent, { type: "subagent_tool_call_end" }>,
+            kind: "tool_call_request" | "tool_call_response",
+            payload: unknown
+          ) => {
+            const parentToolName =
+              "parent_tool_name" in eventData ? eventData.parent_tool_name : undefined;
+            publishStreamEvent(eventData, "", getEventLabel(eventData), {
+              kind,
+              toolName: eventData.tool_name,
+              toolCallId: eventData.call_id,
+              parentToolName,
+              payload,
             });
           };
 
@@ -156,12 +233,12 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
               case 'assistant_token': {
                 accumulatedResponse += eventData.token;
                 scheduleResponseUpdate(accumulatedResponse);
-                publishStreamEvent(eventData, eventData.token, "Assistant");
+                publishStreamEvent(eventData, eventData.token, getEventLabel(eventData));
                 return "continue";
               }
               case 'thinking_token': {
                 onThinkingTokenReceived?.("Assistant", eventData.token);
-                publishStreamEvent(eventData, eventData.token, "Assistant Thinking");
+                publishStreamEvent(eventData, eventData.token, getEventLabel(eventData));
                 return "continue";
               }
               case 'thinking_complete': {
@@ -170,7 +247,7 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
               }
               case 'subagent_thinking_token': {
                 onThinkingTokenReceived?.(eventData.tool_name, eventData.token);
-                publishStreamEvent(eventData, eventData.token, `Thinking • ${eventData.tool_name}`);
+                publishStreamEvent(eventData, eventData.token, getEventLabel(eventData));
                 return "continue";
               }
               case 'subagent_thinking_complete': {
@@ -179,7 +256,7 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
               }
               case 'subagent_token': {
                 onSubagentTokenReceived?.(eventData.tool_name, eventData.token);
-                publishStreamEvent(eventData, eventData.token, `Subagent • ${eventData.tool_name}`);
+                publishStreamEvent(eventData, eventData.token, getEventLabel(eventData));
                 return "continue";
               }
               case 'assistant_tool_call_start':
@@ -193,6 +270,7 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
                 } else {
                   onToolCallStart?.(eventData.tool_name, eventData.input);
                 }
+                publishToolLifecycleEvent(eventData, "tool_call_request", eventData.input);
                 return "continue";
               case 'assistant_tool_call_end':
               case 'subagent_tool_call_end':
@@ -202,19 +280,10 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
                     eventData.tool_name,
                     eventData.output
                   );
-                  if (typeof eventData.output === "string" && eventData.output.trim().length > 0) {
-                    publishStreamEvent(
-                      eventData,
-                      eventData.output,
-                      `Tool Result • ${eventData.tool_name}`
-                    );
-                  }
                 } else {
                   onToolCallEnd?.(eventData.tool_name, eventData.output);
-                  if (typeof eventData.output === "string" && eventData.output.trim().length > 0) {
-                    publishStreamEvent(eventData, eventData.output, `Tool Result • ${eventData.tool_name}`);
-                  }
                 }
+                publishToolLifecycleEvent(eventData, "tool_call_response", eventData.output);
                 return "continue";
               case 'end': {
                 setIsLoading(false);
@@ -223,7 +292,11 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
                 return "end";
               }
               case 'error': {
-                throw new Error(eventData.message);
+                publishStreamEvent(eventData, eventData.message, getEventLabel(eventData));
+                flushPendingResponse();
+                setIsLoading(false);
+                onStreamingStateChange?.(false);
+                return "end";
               }
               default:
                 return "continue";
@@ -248,46 +321,20 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
               buffer += chunk;
             }
 
-            // Parse SSE events from buffer
-            const lines = buffer.split('\n');
-            buffer = lines.pop() || ''; // Keep incomplete line in buffer
+            const parsed = parseSsePayloads(buffer);
+            buffer = parsed.nextBuffer;
 
-            for (const rawLine of lines) {
-              const line = rawLine.replace(/\r$/, '');
-
-              if (line.startsWith('data:')) {
-                const jsonChunk = line.slice(5).trimStart();
-                if (jsonChunk) {
-                  eventBuffer.push(jsonChunk);
-                }
-                continue;
-              }
-
-              // Blank line marks end of SSE event
-              if (line === '') {
-                if (eventBuffer.length === 0) continue;
-                const eventPayload = eventBuffer.join('\n');
-                eventBuffer = [];
-                const status = processCompletedEvent(eventPayload);
-                if (status === "end") {
-                  return;
-                }
+            for (const eventPayload of parsed.payloads) {
+              const status = processCompletedEvent(eventPayload);
+              if (status === "end") {
+                return;
               }
             }
 
             if (done) {
-              const trailingLine = buffer.replace(/\r$/, '');
-              if (trailingLine.startsWith('data:')) {
-                const jsonChunk = trailingLine.slice(5).trimStart();
-                if (jsonChunk) {
-                  eventBuffer.push(jsonChunk);
-                }
-              }
-
-              // Flush any buffered event in case the stream ended without a trailing blank line
-              if (eventBuffer.length > 0) {
-                const eventPayload = eventBuffer.join('\n');
-                eventBuffer = [];
+              const flushed = parseSsePayloads(buffer, true);
+              buffer = flushed.nextBuffer;
+              for (const eventPayload of flushed.payloads) {
                 const status = processCompletedEvent(eventPayload);
                 if (status === "end") {
                   break;

@@ -59,6 +59,11 @@ export interface StreamEventItem {
   label: string;
   token: string;
   timestamp: number;
+  kind: "default" | "tool_call_request" | "tool_call_response";
+  toolName?: string;
+  toolCallId?: string;
+  parentToolName?: string;
+  payload?: unknown;
 }
 
 export type SSEEvent =
@@ -68,9 +73,9 @@ export type SSEEvent =
   | { type: "subagent_thinking_token"; tool_name: string; token: string; source: StreamSource }
   | { type: "subagent_thinking_complete"; tool_name: string; source: StreamSource }
   | { type: "subagent_token"; tool_name: string; token: string; source: StreamSource }
-  | { type: "assistant_tool_call_start"; tool_name: string; input?: unknown; source: StreamSource }
-  | { type: "assistant_tool_call_end"; tool_name: string; output?: unknown; source: StreamSource }
-  | { type: "subagent_tool_call_start"; parent_tool_name: string; tool_name: string; input?: unknown; source: StreamSource }
-  | { type: "subagent_tool_call_end"; parent_tool_name: string; tool_name: string; output?: unknown; source: StreamSource }
+  | { type: "assistant_tool_call_start"; call_id: string; tool_name: string; input?: unknown; source: StreamSource }
+  | { type: "assistant_tool_call_end"; call_id: string; tool_name: string; output?: unknown; source: StreamSource }
+  | { type: "subagent_tool_call_start"; call_id: string; parent_tool_name: string; tool_name: string; input?: unknown; source: StreamSource }
+  | { type: "subagent_tool_call_end"; call_id: string; parent_tool_name: string; tool_name: string; output?: unknown; source: StreamSource }
   | { type: "end"; source: StreamSource }
   | { type: "error"; message: string; source: StreamSource };
