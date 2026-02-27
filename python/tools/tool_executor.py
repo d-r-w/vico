@@ -326,7 +326,7 @@ Retreived full topic details for [{topic_ids}]
 
             forbidden_patterns = [
                 r"rm\s+-rf\s+[/~]",  # Prevent dangerous rm commands
-                r">[>]?\s*[/~]",  # Prevent writing to root/home
+                r">[>]?\s*(?!/dev/null\b)[/~]",  # Prevent writing to root/home, allow /dev/null
                 r"\|\s*rm",  # Prevent piping to rm
                 r"sudo",  # Prevent sudo usage
                 r"chmod\s+[0-7]*7\b",  # Prevent adding execute permissions
