@@ -1,7 +1,6 @@
 "use client";
 
-import { Search, MessageSquare, Telescope } from "lucide-react";
-
+import { Search, Telescope } from "lucide-react";
 import { MODES, Mode } from "@/app/types";
 import { Button } from "@/components/ui/button";
 
@@ -18,8 +17,8 @@ export function ModeToggle({ mode, onModeChange }: ModeToggleProps) {
         size="sm"
         onClick={() => onModeChange(MODES.SEARCH)}
         className={`${
-          mode === MODES.SEARCH 
-            ? "bg-secondary text-secondary-foreground hover:bg-secondary/90" 
+          mode === MODES.SEARCH
+            ? "bg-secondary text-secondary-foreground hover:bg-secondary/90"
             : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
         }`}
       >
@@ -27,25 +26,12 @@ export function ModeToggle({ mode, onModeChange }: ModeToggleProps) {
         Search
       </Button>
       <Button
-        variant={mode === MODES.CHAT ? "default" : "ghost"}
-        size="sm"
-        onClick={() => onModeChange(MODES.CHAT)}
-        className={`${
-          mode === MODES.CHAT 
-            ? "bg-secondary text-secondary-foreground hover:bg-secondary/90" 
-            : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-        }`}
-      >
-        <MessageSquare className="h-4 w-4 mr-2" />
-        Chat
-      </Button>
-      <Button
         variant={mode === MODES.AGENT ? "default" : "ghost"}
         size="sm"
         onClick={() => onModeChange(MODES.AGENT)}
         className={`${
-          mode === MODES.AGENT 
-            ? "bg-secondary text-secondary-foreground hover:bg-secondary/90" 
+          mode === MODES.AGENT
+            ? "bg-secondary text-secondary-foreground hover:bg-secondary/90"
             : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
         }`}
       >
@@ -54,4 +40,4 @@ export function ModeToggle({ mode, onModeChange }: ModeToggleProps) {
       </Button>
     </div>
   );
-} 
+}

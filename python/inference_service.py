@@ -21,7 +21,7 @@ import memory_storage_service
 from streaming_inference_service import (
     cache_manager,
     describe_image,
-    stream_chat_with_memories,
+    stream_agent_response_with_memories,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -35,12 +35,12 @@ _STREAM_HEADERS = {
 }
 
 
-@app.get("/api/chat/")
-async def chat(
-    query: str = Query(..., description="Chat query")
+@app.get("/api/agent/stream/")
+async def stream_agent(
+    query: str = Query(..., description="Agent query")
 ):
     return StreamingResponse(
-        stream_chat_with_memories(query),
+        stream_agent_response_with_memories(query),
         media_type="text/event-stream",
         headers=_STREAM_HEADERS,
     )

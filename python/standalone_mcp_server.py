@@ -5,13 +5,23 @@
 from mcp.server.fastmcp import FastMCP
 import os
 import logging
+import re
+import fnmatch
 from functools import wraps
+from pathlib import Path
 from typing import Any, Callable, Literal
 import sys
 sys.path.insert(0, os.path.dirname(__file__))
 
 # Set up logging
 MAX_LOG_LENGTH = 1000
+EXCLUDE_DIRS = {
+    ".git", "node_modules", "data", ".next", "__pycache__",
+    "venv", ".venv", "env", "dist", "build", "target", "bin", "obj",
+    ".idea", ".vscode", ".cursor", ".mypy_cache", ".pytest_cache",
+    ".ruff_cache", ".npm", ".cache", "__pypackages__", "node_modules",
+    "site-packages", "venv", "env", ".tox", ".nox", ".egg-info"
+}
 
 def truncate_for_log(obj: Any, max_len: int = MAX_LOG_LENGTH) -> str:
     """Truncate large objects for logging."""
@@ -303,21 +313,192 @@ def grep_files(
     Returns:
         A formatted string with search results according to the specified output mode
     """
-    from file_service import grep_files as service_grep_files
-    
-    return service_grep_files(
-        pattern=pattern,
-        directory=directory,
-        file_path=file_path,
-        file_extension=file_extension,
-        glob_pattern=glob_pattern,
-        case_sensitive=case_sensitive,
-        multiline=multiline,
-        output_mode=output_mode,
-        max_matches=max_matches,
-        match_start=match_start,
-        match_end=match_end
-    )
+    flags = 0 if case_sensitive else re.IGNORECASE
+    if multiline:
+        flags |= re.DOTALL | re.MULTILINE
+
+    try:
+        regex = re.compile(pattern, flags)
+    except re.error as e:
+        return f"Error: Invalid regex pattern: {str(e)}"
+
+    current_dir = Path(directory)
+    if not current_dir.is_dir():
+        return f"Error: '{directory}' is not a directory or does not exist."
+
+    results = []
+    matching_files_list = []
+    total_matches_count = 0
+    total_files_with_matches = 0
+    files_searched = 0
+
+    range_start = match_start
+    range_end = match_end if match_end > 0 else match_start + max_matches
+
+    limit_reached = False
+    max_files_limit = 50000
+
+    if file_path:
+        target = Path(file_path)
+        if not target.is_file():
+            return f"Error: '{file_path}' is not a valid file or does not exist."
+        all_files = [target]
+    else:
+        all_files = None
+
+    if all_files:
+        files_to_process = all_files
+    else:
+        def file_generator():
+            nonlocal limit_reached, files_searched
+            for root, dirs, files_in_dir in os.walk(current_dir):
+                if limit_reached:
+                    return
+                dirs.sort()
+                dirs[:] = [d for d in dirs if d not in EXCLUDE_DIRS and not d.startswith('.')]
+                files_in_dir.sort()
+                for f_name in files_in_dir:
+                    files_searched += 1
+                    if files_searched > max_files_limit:
+                        limit_reached = True
+                        return
+                    yield Path(root) / f_name
+        files_to_process = file_generator()
+
+    for p in files_to_process:
+        if len(results) >= max_matches:
+            limit_reached = True
+            break
+
+        if file_extension and p.suffix.lower() != file_extension.lower():
+            continue
+        if glob_pattern:
+            if not fnmatch.fnmatch(str(p), glob_pattern) and not fnmatch.fnmatch(p.name, glob_pattern):
+                continue
+
+        try:
+            with open(p, "r", encoding="utf-8", errors="ignore") as f:
+                if multiline:
+                    content = f.read()
+                    matches = list(regex.finditer(content))
+                    if matches:
+                        total_files_with_matches += 1
+                        if len(matching_files_list) < 10:
+                            matching_files_list.append(str(p))
+
+                        file_match_count = len(matches)
+
+                        if output_mode == "files":
+                            if range_start < total_files_with_matches <= range_end:
+                                match = matches[0]
+                                lines = content.splitlines()
+                                line_num = content[:match.start()].count('\n') + 1
+                                start_idx = max(0, line_num - 3)
+                                end_idx = min(len(lines), line_num + 2)
+                                context = []
+                                for i in range(start_idx, end_idx):
+                                    prefix = ">>> " if i == line_num - 1 else "    "
+                                    context.append(f"{prefix}{i+1:6d}|{lines[i]}")
+                                results.append(f"\n{p}:\n" + "\n".join(context) + "\n")
+
+                        elif output_mode == "count":
+                            if range_start < total_files_with_matches <= range_end:
+                                results.append(f"{file_match_count:4d}: {p}")
+                        elif output_mode == "content":
+                            lines = content.splitlines()
+                            for match in matches:
+                                total_matches_count += 1
+                                if range_start < total_matches_count <= range_end:
+                                    if len(results) < max_matches:
+                                        line_num = content[:match.start()].count('\n') + 1
+                                        start_idx = max(0, line_num - 4)
+                                        end_idx = min(len(lines), line_num + 3)
+                                        context = []
+                                        for i in range(start_idx, end_idx):
+                                            prefix = ">>> " if i == line_num - 1 else "    "
+                                            context.append(f"{prefix}{i+1:6d}|{lines[i]}")
+                                        results.append(f"\n{p}:\n" + "\n".join(context) + "\n")
+
+                        if output_mode != "content":
+                            total_matches_count += file_match_count
+                else:
+                    file_has_match = False
+                    if output_mode in ["content", "files"]:
+                        lines = f.readlines()
+                        for i, line in enumerate(lines):
+                            if regex.search(line):
+                                if not file_has_match:
+                                    file_has_match = True
+                                    total_files_with_matches += 1
+                                    if len(matching_files_list) < 10:
+                                        matching_files_list.append(str(p))
+
+                                    if output_mode == "files":
+                                        if range_start < total_files_with_matches <= range_end:
+                                            start_idx = max(0, i - 2)
+                                            end_idx = min(len(lines), i + 3)
+                                            context = []
+                                            for j in range(start_idx, end_idx):
+                                                prefix = ">>> " if j == i else "    "
+                                                context.append(f"{prefix}{j+1:6d}|{lines[j].rstrip()}")
+                                            results.append(f"\n{p}:\n" + "\n".join(context) + "\n")
+
+                                        total_matches_count += 1
+                                        break
+
+                                total_matches_count += 1
+                                if range_start < total_matches_count <= range_end:
+                                    if len(results) < max_matches:
+                                        start_idx = max(0, i - 3)
+                                        end_idx = min(len(lines), i + 3)
+                                        context = []
+                                        for j in range(start_idx, end_idx):
+                                            prefix = ">>> " if j == i else "    "
+                                            context.append(f"{prefix}{j+1:6d}|{lines[j].rstrip()}")
+                                        results.append(f"\n{p}:\n" + "\n".join(context) + "\n")
+                    else:
+                        match_count = 0
+                        for line in f:
+                            if regex.search(line):
+                                match_count += 1
+                        if match_count > 0:
+                            total_files_with_matches += 1
+                            if len(matching_files_list) < 10:
+                                matching_files_list.append(str(p))
+                            total_matches_count += match_count
+                            if output_mode == "count":
+                                if range_start < total_files_with_matches <= range_end:
+                                    results.append(f"{match_count:4d}: {p}")
+        except Exception:
+            continue
+
+    if not results:
+        return f"No matches found for pattern: {pattern} (searched {files_searched} files)"
+
+    total = total_matches_count if output_mode == "content" else total_files_with_matches
+    unit = "matches" if output_mode == "content" else "files"
+    plus = "+" if limit_reached else ""
+
+    shown_start = match_start + 1
+    shown_end = match_start + len(results)
+
+    pagination_info = f" (showing {shown_start}-{shown_end} of {total}{plus} {unit})"
+
+    file_summary = ""
+    if matching_files_list and output_mode not in ["files", "count"]:
+        file_summary = "Matching files:\n" + "\n".join(f"- {f}" for f in matching_files_list)
+        if total_files_with_matches > 10:
+            file_summary += f"\n(and {total_files_with_matches - 10}{plus} more..)"
+        file_summary += "\n\n"
+
+    if output_mode == "files":
+        header = f"Found {total}{plus} files with pattern '{pattern}' (showing first match from each for files {shown_start}-{shown_end} of {total}{plus}):\n"
+    elif output_mode == "count":
+        header = f"Found {total_matches_count}{plus} matches in {total_files_with_matches}{plus} files for pattern '{pattern}'{pagination_info}:\n"
+    else:
+        header = f"Found {total}{plus} matches for pattern '{pattern}'{pagination_info}:\n"
+
+    return file_summary + header + "\n".join(results)
 
 
 @m.tool()
@@ -337,8 +518,30 @@ def read_file_lines(
     Returns:
         The requested lines with line numbers, or an error message.
     """
-    from file_service import read_file_lines as service_read_file_lines
-    return service_read_file_lines(file_path=file_path, start_line=start_line)
+    path = Path(file_path)
+    if not path.is_file():
+        return f"Error: '{file_path}' is not a valid file or does not exist."
+
+    end_line = start_line + 24
+
+    try:
+        results = []
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            for i, line in enumerate(f, 1):
+                if i >= start_line and i <= end_line:
+                    results.append(f"{i:6d}|{line.rstrip()}")
+                if i > end_line:
+                    break
+
+        if not results:
+            return f"No lines found starting at {start_line} for file '{file_path}'."
+
+        actual_end_line = start_line + len(results) - 1
+        output = f"Lines {start_line}-{actual_end_line} of {file_path}:\n" + "\n".join(results)
+        output += "\n\nLLM Reminder: 'grep_files' tool for more targeted results."
+        return output
+    except Exception as e:
+        return f"Error reading file '{file_path}': {str(e)}"
 
 
 @m.tool()
@@ -357,8 +560,53 @@ def list_files(
     Returns:
         A formatted list of files and directories.
     """
-    from file_service import list_files as service_list_files
-    return service_list_files(directory=directory, recursive=recursive)
+    base_path = Path(directory)
+    if not base_path.exists():
+        return f"Error: Path '{directory}' does not exist."
+    if not base_path.is_dir():
+        return f"Error: Path '{directory}' is not a directory."
+
+    results = []
+    try:
+        if recursive:
+            for root, dirs, files in os.walk(base_path):
+                dirs[:] = [d for d in dirs if d not in EXCLUDE_DIRS and not d.startswith('.')]
+                dirs.sort()
+                files.sort()
+
+                try:
+                    rel_root = os.path.relpath(root, base_path)
+                except ValueError:
+                    rel_root = root
+
+                if rel_root == ".":
+                    rel_root = ""
+
+                for d in dirs:
+                    path = os.path.join(rel_root, d) if rel_root else d
+                    results.append(f"[DIR]  {path}")
+                for f in files:
+                    if f.startswith('.'):
+                        continue
+                    path = os.path.join(rel_root, f) if rel_root else f
+                    results.append(f"[FILE] {path}")
+        else:
+            items = sorted(os.listdir(base_path))
+            for item in items:
+                if item.startswith('.') or item in EXCLUDE_DIRS:
+                    continue
+                p = base_path / item
+                if p.is_dir():
+                    results.append(f"[DIR]  {item}")
+                else:
+                    results.append(f"[FILE] {item}")
+
+        if not results:
+            return f"Directory '{directory}' is empty (or contains only excluded items)."
+
+        return f"Contents of '{directory}'{' (recursive)' if recursive else ''}:\n" + "\n".join(results)
+    except Exception as e:
+        return f"Error listing directory '{directory}': {str(e)}"
 
 
 if __name__ == "__main__":

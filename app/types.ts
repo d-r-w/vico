@@ -13,7 +13,6 @@ export type Memory = {
 
 export const MODES = {
   SEARCH: "search",
-  CHAT: "chat",
   AGENT: "agent",
 } as const;
 

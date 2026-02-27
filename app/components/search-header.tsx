@@ -2,9 +2,9 @@
 
 import { useRef } from "react";
 import { Mode, StreamEventItem } from "@/app/types";
+import { ModeToggle } from "@/app/components/mode-toggle";
 import { SearchInput, SearchInputHandle } from "@/app/components/search-input";
 import { ThemeToggle } from "@/app/components/theme-toggle";
-import { ModeToggle } from "@/app/components/mode-toggle";
 import { Button } from "@/components/ui/button";
 import { PanelLeft } from "lucide-react";
 
@@ -27,8 +27,8 @@ interface SearchHeaderProps {
 
 export function SearchHeader({ 
   initialSearch, 
-  mode, 
-  onModeChange, 
+  mode,
+  onModeChange,
   onResponseReceived,
   onThinkingTokenReceived,
   onThinkingComplete,
@@ -68,7 +68,7 @@ export function SearchHeader({
             <SearchInput 
               ref={searchInputRef}
               initialSearch={initialSearch} 
-              mode={mode} 
+              mode={mode}
               onResponseReceived={onResponseReceived}
               onThinkingTokenReceived={onThinkingTokenReceived}
               onThinkingComplete={onThinkingComplete}

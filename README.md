@@ -4,7 +4,7 @@ Vico couples a streaming Next.js client with a local MLX inference stack to capt
 
 ## Feature Highlights
 - **Memory-centric workspace** - resizable panels combine assistant output with a searchable grid of DuckDB-stored memories (text + optional image).
-- **Search, Chat, Agent modes** - instant text filtering, conversational Q&A, or multi-step agentic reasoning with live token and tool-call telemetry.
+- **Search and Agent modes** - instant text filtering and multi-step agentic reasoning with live token and tool-call telemetry.
 - **Tool calling** - the FastAPI service exposes functions for editing memories, running terminal commands, and querying an offline Wikipedia snapshot.
 - **Streaming UX** - Server-Sent Events drive typing indicators, thinking blocks, and final responses without blocking the UI.
 - **Local-first data** - memories persist in `data/memories.duckdb`, prompt caches live under `data/prompt_caches/`, and large corpora remain on disk.
@@ -35,16 +35,13 @@ Vico couples a streaming Next.js client with a local MLX inference stack to capt
    ```bash
    bun run dev  # http://localhost:3000
    ```
-5. Visit http://localhost:3000 and switch between Search, Chat, and Agent modes to verify streaming responses.
+5. Visit http://localhost:3000 and switch between Search and Agent modes to verify streaming responses.
 
 ## Configuration Reference
 Sample `python/.env` model configuration:
 
 ```bash
-# Chat Model Configuration
-CHAT_MODEL_NAME=mlx-community/Qwen2.5-14B-Instruct-1M-8bit
-
-# Agentic Model Configuration
+# Agent Model Configuration
 AGENTIC_MODEL_NAME=mlx-community/Qwen3-Next-80B-A3B-Thinking-4bit
 AGENTIC_MAX_TOKENS=81920
 AGENTIC_MAX_KV_SIZE=256000

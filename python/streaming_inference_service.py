@@ -458,9 +458,9 @@ def setup_generation_context(
 
     messages: List[Dict[str, Any]] = []
     if cache_manager.is_initialized(cache_key):
-        messages.extend(prompt_templates.get_vico_chat_template(query, tool_usage_prompt, False, extra_instructions=extra_instructions))
+        messages.extend(prompt_templates.get_vico_agent_template(query, tool_usage_prompt, False, extra_instructions=extra_instructions))
     else:
-        messages = prompt_templates.get_vico_chat_template(query, tool_usage_prompt, extra_instructions=extra_instructions)
+        messages = prompt_templates.get_vico_agent_template(query, tool_usage_prompt, extra_instructions=extra_instructions)
 
     tools = allowed_tool_definitions if allowed_tool_definitions is not None else []
     prompt = tokenizer.apply_chat_template(messages, tools, add_generation_prompt=True, tokenize=False)
@@ -1108,20 +1108,18 @@ def describe_image(image: Any, memory_text: Optional[str] = None) -> str:
     return generation
 
 
-def stream_chat(query: str, context_xml: str, agent_id: str | None = None) -> Iterable[str]:
+def stream_agent_response(query: str, context_xml: str, agent_id: str | None = None) -> Iterable[str]:
     """
-    Stream a chat response with agentic tool-calling support.
+    Stream an agent response with tool-calling support.
 
     Args:
         query: The user's query
         context_xml: XML context (typically memories)
-        is_agent: Whether to use agentic model and tool-calling
 
     Yields:
         SSE event strings
     """
     default_model_name = "mlx-community/Qwen2.5-14B-Instruct-1M-8bit"
-    chat_model_name = os.getenv("CHAT_MODEL_NAME", default_model_name)
     agentic_model_name = os.getenv("AGENTIC_MODEL_NAME", default_model_name)
 
     profile = get_agent_profile(agent_id)
@@ -1134,9 +1132,9 @@ def stream_chat(query: str, context_xml: str, agent_id: str | None = None) -> It
 
     messages: List[Dict[str, Any]] = []
     if cache_manager.is_initialized(cache_key):
-        messages.extend(prompt_templates.get_vico_chat_template(query, tool_usage_prompt, False, extra_instructions=profile.system_instructions))
+        messages.extend(prompt_templates.get_vico_agent_template(query, tool_usage_prompt, False, extra_instructions=profile.system_instructions))
     else:
-        messages = prompt_templates.get_vico_chat_template(query, tool_usage_prompt, extra_instructions=profile.system_instructions)
+        messages = prompt_templates.get_vico_agent_template(query, tool_usage_prompt, extra_instructions=profile.system_instructions)
 
     if messages and messages[0]["role"] == "system":
         logger.info(f"[Assistant] system_instructions:\n{messages[0]['content']}")
@@ -1180,18 +1178,16 @@ def stream_chat(query: str, context_xml: str, agent_id: str | None = None) -> It
     cache_manager.mark_initialized(cache_key)
 
 
-def stream_chat_with_memories(query: str, agent_id: str | None = None) -> Iterable[str]:
+def stream_agent_response_with_memories(query: str, agent_id: str | None = None) -> Iterable[str]:
     """
-    Stream a chat response with memory context automatically loaded.
+    Stream an agent response with memory context automatically loaded.
 
     Args:
         query: The user's query
-        is_agent: Whether to use agentic model and tool-calling
 
     Yields:
         SSE event strings
     """
     memories_xml = get_memories_xml()
-    yield from stream_chat(query, memories_xml, agent_id=agent_id)
+    yield from stream_agent_response(query, memories_xml, agent_id=agent_id)
     yield make_sse("end")
-

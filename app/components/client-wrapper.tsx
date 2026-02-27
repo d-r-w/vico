@@ -12,7 +12,7 @@ interface ClientWrapperProps {
 
 export function ClientWrapper({ initialSearch, onToggleSidebar }: ClientWrapperProps) {
   const [response, setResponse] = useState<string>("");
-  const [mode, setMode] = useState<Mode>(MODES.SEARCH);
+  const [mode, setMode] = useState<Mode>(MODES.AGENT);
   const [assistantThinking, setAssistantThinking] = useState<ThinkingBlock[]>([]);
   const [toolCalls, setToolCalls] = useState<ToolCallState[]>([]);
   const [streamEvents, setStreamEvents] = useState<StreamEventItem[]>([]);

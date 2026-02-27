@@ -20,7 +20,7 @@ def build_system_instructions(*, tool_usage_prompt: str, extra_instructions: Opt
     base.append(tool_usage_prompt.strip())
     return "\n".join(base).strip()
 
-def get_vico_chat_template(query: str, tool_usage_prompt: str, prepend_system_instructions: bool = True, extra_instructions: Optional[str] = None):
+def get_vico_agent_template(query: str, tool_usage_prompt: str, prepend_system_instructions: bool = True, extra_instructions: Optional[str] = None):
     if prepend_system_instructions:
         messages = [
             {"role": "system", "content": f"""
@@ -45,7 +45,7 @@ def get_image_description_template(memory_text=None):
         memory_text (str, optional): Additional context for the image
     
     Returns:
-        list: A list of message objects for the chat template
+        list: A list of message objects for the agent template
     """
     base_prompt = "Describe the image in the fullest of detail, per your instructions. In your final answer, include the summary of your observations."
     context_block = f"\n\n<image_context>\n\t{memory_text}\n</image_context>\n\n" if memory_text else ""
