@@ -340,7 +340,7 @@ Retreived full topic details for [{topic_ids}]
             try:
                 if command.strip() and not command.strip()[0].isdigit():
                     process = subprocess.run(
-                        ["/bin/bash", "-c", command], capture_output=True, text=True, timeout=30
+                        ["/bin/bash", "-c", command], capture_output=True, text=True, timeout=3600
                     )
                     result_lines = [f"Command executed: {command}", f"Exit code: {process.returncode}"]
                     if process.stdout:
