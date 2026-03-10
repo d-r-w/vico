@@ -39,18 +39,9 @@ _PARAMETER_PATTERN = re.compile(
 )
 
 
-def parse_tool_call(response_text: str) -> ToolCall:
-    parsed_calls = parse_tool_calls(response_text)
-    if len(parsed_calls) > 1:
-        logger.debug("Multiple <tool_call> blocks detected; using the first occurrence")
-    return parsed_calls[0]
-
-
 def parse_tool_calls(response_text: str) -> List[ToolCall]:
-    if not isinstance(response_text, str):
-        raise ToolCallParseError("Response text must be a string")
-
-    if not response_text.strip():
+    response_text = response_text.strip()
+    if not response_text:
         raise ToolCallParseError("Response text is empty")
 
     matches = list(_TOOL_CALL_PATTERN.finditer(response_text))
@@ -360,48 +351,3 @@ Retreived full topic details for [{topic_ids}]
     if result is None:
         return f"Error: Unknown tool `{tool_name}`."
     return result
-
-
-def get_tool_call_results(response_text, passed_logger, memory_storage_service=None, cache_manager=None, allowed_tool_names=None):
-    """
-    Process tool call results from response text and execute the appropriate tool.
-    
-    Args:
-        response_text: The response text containing tool call information
-        passed_logger: Logger instance passed from calling module
-        memory_storage_service: Service for memory operations
-        cache_manager: Cache manager for invalidating caches
-    
-    Returns:
-        List containing [tool_name, result]
-    """
-    logger.info(f"Processing tool call from response text")
-    logger.debug(f"Response text length: {len(response_text)} characters")
-    
-    tool_name: str = "unknown"
-    try:
-        parsed_call = parse_tool_call(response_text)
-    except ToolCallParseError as exc:
-        logger.error(f"Error parsing tool call: {exc.message}")
-        return [tool_name, f"Tool call parsing error. Please check syntax: {exc.message}"]
-
-    parsed_name, arguments = parsed_call
-    tool_name = parsed_name
-
-    try:
-        logger.info(f"Executing tool: {tool_name}")
-        logger.debug(f"Parsed arguments: {arguments}")
-        result = execute_tool_call(
-            tool_name,
-            arguments,
-            allowed_tool_names=allowed_tool_names,
-            memory_storage_service=memory_storage_service,
-            cache_manager=cache_manager,
-        )
-        
-        logger.info(f"Tool call ({tool_name}) result: {result}")
-        return [tool_name, result]
-                        
-    except Exception as e:
-        logger.error(f"Error processing tool call: {e}")
-        return [tool_name, f"Tool call parsing error. Please check syntax: {str(e)}"]
