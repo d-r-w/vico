@@ -350,7 +350,7 @@ const ResponseDisplayComponent = ({
     return [content, streamKey, isStreaming ? "1" : "0"].join("::");
   }, [content, streamEvents, isStreaming]);
 
-  const { scrollRef, contentRef } = useAutoScroll(autoScrollKey);
+  const { scrollRef } = useAutoScroll(autoScrollKey, { isStreaming });
   const hasPrimaryFlow = streamEvents.length > 0 || content.trim().length > 0 || isStreaming;
   if (!hasPrimaryFlow) {
     return null;
@@ -360,7 +360,7 @@ const ResponseDisplayComponent = ({
     <Card className="w-full mt-3 flex-1 h-full overflow-hidden">
       <CardContent className="p-3 h-full pr-5">
         <ScrollArea ref={scrollRef} className="h-full w-full pr-2">
-          <div ref={contentRef} className="space-y-5">
+          <div className="space-y-5">
             <StreamActivityPanel
               streamEvents={streamEvents}
               isStreaming={isStreaming}
