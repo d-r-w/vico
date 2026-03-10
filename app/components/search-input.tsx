@@ -50,6 +50,7 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
     const [isResetting, setIsResetting] = useState(false);
     const frameRequestRef = useRef<number | null>(null);
     const currentResponseRef = useRef<string>('');
+    const audioContextRef = useRef<AudioContext | null>(null);
 
     const cancelScheduledResponse = useCallback(() => {
       if (frameRequestRef.current === null) {
@@ -67,6 +68,51 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
       cancelScheduledResponse();
       onResponseReceived?.(currentResponseRef.current);
     }, [cancelScheduledResponse, onResponseReceived]);
+
+    const getAudioContext = useCallback(async () => {
+      if (typeof window === "undefined" || typeof window.AudioContext === "undefined") {
+        return null;
+      }
+
+      if (!audioContextRef.current) {
+        audioContextRef.current = new window.AudioContext();
+      }
+
+      if (audioContextRef.current.state === "suspended") {
+        await audioContextRef.current.resume();
+      }
+
+      return audioContextRef.current;
+    }, []);
+
+    const playCompletionChime = useCallback(async () => {
+      const audioContext = await getAudioContext();
+      if (!audioContext) {
+        return;
+      }
+
+      const playTone = (frequency: number, startTime: number, duration: number, peakGain: number) => {
+        const oscillator = audioContext.createOscillator();
+        const gainNode = audioContext.createGain();
+
+        oscillator.type = "sine";
+        oscillator.frequency.setValueAtTime(frequency, startTime);
+
+        gainNode.gain.setValueAtTime(0.0001, startTime);
+        gainNode.gain.exponentialRampToValueAtTime(peakGain, startTime + 0.02);
+        gainNode.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
+
+        oscillator.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+
+        oscillator.start(startTime);
+        oscillator.stop(startTime + duration + 0.05);
+      };
+
+      const startTime = audioContext.currentTime + 0.01;
+      playTone(659.25, startTime, 0.16, 0.035);
+      playTone(880, startTime + 0.12, 0.22, 0.03);
+    }, [getAudioContext]);
 
     useImperativeHandle(ref, () => ({
       focus: () => {
@@ -101,6 +147,7 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
     useEffect(() => {
       return () => {
         cancelScheduledResponse();
+        void audioContextRef.current?.close();
       };
     }, [cancelScheduledResponse]);
 
@@ -129,6 +176,7 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
         onStreamingStateChange?.(true);
         currentResponseRef.current = '';
         onResponseReceived?.('');
+        void getAudioContext();
         
         const response = await fetch('/api/agent/stream', {
           method: 'POST',
@@ -299,6 +347,7 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
               setIsLoading(false);
               onStreamingStateChange?.(false);
               flushPendingResponse();
+              void playCompletionChime();
               return "end";
             }
             case 'error': {
