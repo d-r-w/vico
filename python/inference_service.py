@@ -21,6 +21,7 @@ import memory_storage_service
 from streaming_inference_service import (
     cache_manager,
     describe_image,
+    get_agent_memory_cache_key,
     stream_agent_response_with_memories,
 )
 
@@ -44,6 +45,12 @@ async def stream_agent(
         media_type="text/event-stream",
         headers=_STREAM_HEADERS,
     )
+
+
+@app.post("/api/agent/reset/")
+async def reset_agent_cache():
+    cache_manager.release_cache(get_agent_memory_cache_key())
+    return {"success": True}
 
 
 @app.get("/api/recent_memories/")

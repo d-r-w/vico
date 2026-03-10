@@ -56,6 +56,13 @@ def get_model_generation_lock(model_name: str) -> threading.Lock:
         return lock
 
 
+def get_agent_memory_cache_key(agent_id: str | None = None) -> str:
+    default_model_name = "mlx-community/Qwen2.5-14B-Instruct-1M-8bit"
+    agentic_model_name = os.getenv("AGENTIC_MODEL_NAME", default_model_name)
+    profile = get_agent_profile(agent_id)
+    return f"{agentic_model_name.split('/')[-1]}_memory_cache__{get_agent_cache_suffix(profile)}"
+
+
 class ModelInfo:
     """Container for VLM model components."""
 
@@ -1119,16 +1126,13 @@ def stream_agent_response(query: str, context_xml: str, agent_id: str | None = N
     Yields:
         SSE event strings
     """
-    default_model_name = "mlx-community/Qwen2.5-14B-Instruct-1M-8bit"
-    agentic_model_name = os.getenv("AGENTIC_MODEL_NAME", default_model_name)
-
     profile = get_agent_profile(agent_id)
     agent_tool_definitions = build_agent_profile_tool_definitions(get_specialized_agent_profiles())
     allowed_tool_definitions = agent_tool_definitions
     tool_usage_prompt = build_tool_usage_prompt(allowed_tool_definitions=allowed_tool_definitions)
 
-    model_name = agentic_model_name
-    cache_key = f"{model_name.split('/')[-1]}_memory_cache__{get_agent_cache_suffix(profile)}"
+    cache_key = get_agent_memory_cache_key(agent_id)
+    model_name = os.getenv("AGENTIC_MODEL_NAME", "mlx-community/Qwen2.5-14B-Instruct-1M-8bit")
 
     messages: List[Dict[str, Any]] = []
     if cache_manager.is_initialized(cache_key):

@@ -3,9 +3,10 @@
 import { useState, useRef, forwardRef, useImperativeHandle, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Mode, MODES, SSEEvent, StreamEventItem } from "@/app/types";
-import { Loader2 } from "lucide-react";
+import { Loader2, RotateCcw } from "lucide-react";
 
 interface SearchInputProps {
   initialSearch?: string;
@@ -46,6 +47,7 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
     const inputRef = useRef<HTMLInputElement>(null);
     const prevModeRef = useRef(mode);
     const [isLoading, setIsLoading] = useState(false);
+    const [isResetting, setIsResetting] = useState(false);
     const frameRequestRef = useRef<number | null>(null);
     const currentResponseRef = useRef<string>('');
 
@@ -101,6 +103,14 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
         cancelScheduledResponse();
       };
     }, [cancelScheduledResponse]);
+
+    const resetAssistantState = useCallback(() => {
+      cancelScheduledResponse();
+      currentResponseRef.current = "";
+      setSearch("");
+      onResponseReceived?.("");
+      onStreamingStateChange?.(false);
+    }, [cancelScheduledResponse, onResponseReceived, onStreamingStateChange]);
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       const value = e.target.value;
@@ -353,6 +363,30 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
       }
     };
 
+    const handleReset = async () => {
+      if (mode !== MODES.AGENT || isResetting) {
+        return;
+      }
+
+      try {
+        setIsResetting(true);
+        const response = await fetch("/api/agent/reset", {
+          method: "POST",
+        });
+
+        if (!response.ok) {
+          throw new Error("Failed to reset agent cache");
+        }
+
+        resetAssistantState();
+        inputRef.current?.focus();
+      } catch (error) {
+        console.error("Failed to reset agent cache:", error);
+      } finally {
+        setIsResetting(false);
+      }
+    };
+
     const handleKeyDown = async (e: React.KeyboardEvent<HTMLInputElement>) => {
       const value = e.currentTarget.value;
       
@@ -395,6 +429,19 @@ const SearchInput = forwardRef<SearchInputHandle, SearchInputProps>(
               onKeyDown={handleKeyDown}
               className="flex-grow"
             />
+            {mode === MODES.AGENT && (
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={handleReset}
+                disabled={isResetting}
+                className="shrink-0 border-primary-foreground/20 bg-primary-foreground/5 text-primary-foreground hover:border-primary-foreground/30 hover:bg-primary-foreground/10 hover:text-primary-foreground"
+              >
+                <RotateCcw className={`h-4 w-4${isResetting ? " animate-spin" : ""}`} />
+                <span className="sr-only">Reset assistant cache</span>
+              </Button>
+            )}
           </form>
         )}
       </>
