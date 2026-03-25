@@ -1,6 +1,7 @@
 get_full_topic_details_tool_name = "get_full_topic_details"
 perform_research_tool_name = "perform_research"
 search_memories_tool_name = "search_memories"
+extract_webpage_content_tool_name = "extract_webpage_content"
 
 def get_tool_definitions():
     return [
@@ -134,6 +135,34 @@ def get_tool_definitions():
                     },
                 },
                 "required": ["topic_ids"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": f"{extract_webpage_content_tool_name}",
+            "description": "Open a webpage in a browser, scroll through viewport segments, and return merged visible text with absolute media URLs for LLM ingestion",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "The webpage URL to open in the browser"
+                    },
+                    "max_pages": {
+                        "type": "integer",
+                        "description": "Maximum number of viewport-sized scroll segments to extract",
+                        "minimum": 1,
+                        "maximum": 10,
+                        "default": 3
+                    }
+                },
+                "required": ["url"]
+            },
+            "returns": {
+                "type": "string",
+                "description": "Merged webpage text and absolute media URLs captured from each rendered viewport segment"
             }
         }
     }

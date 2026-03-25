@@ -1,0 +1,6 @@
+# domain | name | value
+# Blank lines and comments are ignored.
+# A rule matches when the request host equals the domain or ends with `.domain`.
+
+example.com | sessionid | replace-me
+api.example.com | csrftoken | replace-me

@@ -23,8 +23,9 @@ Vico couples a streaming Next.js client with a local MLX inference stack to capt
 1. **Install dependencies**
    ```bash
    bun install
-   (cd python && uv sync)
+   (cd python && bash bootstrap.sh)
    ```
+   The Python bootstrap installs the locked dependencies and the Chromium build required by browser-rendered webpage extraction.
 2. **Configure models** - copy or edit `python/.env` to configure local models (see below).
 3. **Run the inference API**
    ```bash
@@ -56,6 +57,41 @@ AGENTIC_REPETITION_CONTEXT_SIZE=64
 IMAGE_MODEL_NAME=mlx-community/gemma-3-27b-it-8bit
 IMAGE_MAX_TOKENS=100000
 IMAGE_TEMP=0.7
+```
+
+### Web Header Registry
+Browser tools will use headers stored here.
+
+- Live file: `data/web_headers.txt` (gitignored)
+- Example file: `data/web_headers.example.txt`
+- Format: `domain | name | value`
+- Comments and blank lines are ignored
+- A rule applies when the request host exactly matches `domain` or ends with `.` + `domain`
+- More specific domains override broader matches for the same header name
+
+Example:
+
+```text
+example.com | Authorization | Bearer replace-me
+api.example.com | X-API-Key | replace-me
+```
+
+### Web Cookie Registry
+Browser tools will use cookies stored here.
+
+- Live file: `data/web_cookies.txt` (gitignored)
+- Example file: `data/web_cookies.example.txt`
+- Format: `domain | name | value`
+- Comments and blank lines are ignored
+- A rule applies when the request host exactly matches `domain` or ends with `.` + `domain`
+- More specific domains override broader matches for the same cookie name
+- Cookies are added with `path=/`
+
+Example:
+
+```text
+example.com | sessionid | replace-me
+api.example.com | csrftoken | replace-me
 ```
 
 

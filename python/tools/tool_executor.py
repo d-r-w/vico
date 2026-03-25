@@ -5,7 +5,11 @@ import logging
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from offline_wikipedia_service import offline_wikipedia_service
-from tools.tool_definitions import get_full_topic_details_tool_name, perform_research_tool_name
+from tools.tool_definitions import (
+    get_full_topic_details_tool_name,
+    perform_research_tool_name,
+)
+from tools.web_extractor import extract_webpage_content
 
 # Set up logging for this module
 logger = logging.getLogger(__name__)
@@ -310,6 +314,25 @@ If these matches aren't useful, simply attempt different keywords in a new `{per
                     
 Retreived full topic details for [{topic_ids}]
 """
+
+        case "extract_webpage_content":
+            url = arguments.get("url", "")
+            max_pages = arguments.get("max_pages", 3)
+            logger.info("Extracting webpage content from URL: %s", url)
+
+            try:
+                parsed_max_pages = int(max_pages)
+            except (TypeError, ValueError):
+                return "Error: `max_pages` must be an integer."
+
+            try:
+                result = extract_webpage_content(
+                    url,
+                    max_pages=parsed_max_pages,
+                )
+            except Exception as exc:
+                logger.exception("Webpage extraction failed for URL: %s", url)
+                result = f"Error extracting webpage content: {exc}"
 
         case "terminal_command":
             command = arguments.get("command", "")

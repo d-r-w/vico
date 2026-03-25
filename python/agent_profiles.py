@@ -7,6 +7,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
 from tools.tool_definitions import get_tool_definitions, perform_research_tool_name
 
 AGENT_GENERAL = "general"
+AGENT_BROWSER_OPERATOR = "browser_operator"
 AGENT_MEMORY_MANAGER = "memory_manager"
 AGENT_SHELL_OPERATOR = "shell_operator"
 AGENT_ORCHESTRATOR = "orchestrator"
@@ -17,6 +18,7 @@ TOOL_GET_FULL_TOPIC_DETAILS = "get_full_topic_details"
 TOOL_SAVE_MEMORY = "save_memory"
 TOOL_EDIT_MEMORY = "edit_memory"
 TOOL_TERMINAL_COMMAND = "terminal_command"
+TOOL_EXTRACT_WEBPAGE_CONTENT = "extract_webpage_content"
 
 TOOL_USAGE_NO_TOOLS = (
     "You do not have access to any tools.\n"
@@ -80,6 +82,12 @@ def build_tool_usage_prompt(
             "- Use simple, minimal arguments that match the tool schema.",
             "- After receiving <tool_call_results> (the subagent response), continue the task; do not repeat the same call without a new reason.",
             "",
+            "Context & Precision Requirements:",
+            "- For shell tasks: Always specify full paths or working directories explicitly. Never assume default directory — use `cd <path> &&` or `git -C <path>`.",
+            "- For file reads/writes: Include absolute paths (e.g., `~/app/file.ts`) and verify existence before acting.",
+            "- If a task involves multiple steps, break them into sequential subagent calls with full context per step.",
+            "- Always ensure the subagent has the necessary context to complete the task. Do not assume the subagent has context from the previous call.",
+            "",
             "Available subagents:",
         ])
 
@@ -98,7 +106,7 @@ def get_agent_profile(agent_id: Optional[str]) -> AgentProfile:
     profiles: Dict[str, AgentProfile] = {
         AGENT_GENERAL: AgentProfile(
             agent_id=AGENT_GENERAL,
-            description="General assistant with memory search and offline research tools (no writes, no shell).",
+            description="General assistant with memory search and offline research tools (no writes, no shell, no browser).",
             allowed_tool_names={
                 TOOL_SEARCH_MEMORIES,
                 TOOL_PERFORM_RESEARCH,
@@ -107,6 +115,15 @@ def get_agent_profile(agent_id: Optional[str]) -> AgentProfile:
             system_instructions=(
                 f"Always cite the article ID when providing information from `{perform_research_tool_name}`. Only include information that can be found within the article. If the article does not contain the information, do not include it in your response."
             )
+        ),
+        AGENT_BROWSER_OPERATOR: AgentProfile(
+            agent_id=AGENT_BROWSER_OPERATOR,
+            description="Browser-reading agent that extracts rendered webpage content for the parent assistant.",
+            allowed_tool_names={TOOL_EXTRACT_WEBPAGE_CONTENT},
+            system_instructions=(
+                "Use webpage extraction when the task requires reading or summarizing browser-rendered web content.\n"
+                "Prefer concise, task-focused results for the parent assistant."
+            ),
         ),
         AGENT_MEMORY_MANAGER: AgentProfile(
             agent_id=AGENT_MEMORY_MANAGER,
@@ -129,7 +146,7 @@ def get_agent_profile(agent_id: Optional[str]) -> AgentProfile:
         AGENT_ORCHESTRATOR: AgentProfile(
             agent_id=AGENT_ORCHESTRATOR,
             description="Orchestrator agent. Delegates work and reasoning to specialized agents (which have real tool access). Continuously negotiates with available agents on the user's behalf to fully and successfully complete the task.",
-            allowed_tool_names={AGENT_GENERAL, AGENT_MEMORY_MANAGER, AGENT_SHELL_OPERATOR},
+            allowed_tool_names={AGENT_GENERAL, AGENT_BROWSER_OPERATOR, AGENT_MEMORY_MANAGER, AGENT_SHELL_OPERATOR},
         ),
     }
     
@@ -144,6 +161,7 @@ def get_agent_profile(agent_id: Optional[str]) -> AgentProfile:
 def get_specialized_agent_profiles() -> List[AgentProfile]:
     return [
         get_agent_profile(AGENT_GENERAL),
+        get_agent_profile(AGENT_BROWSER_OPERATOR),
         get_agent_profile(AGENT_MEMORY_MANAGER),
         get_agent_profile(AGENT_SHELL_OPERATOR),
     ]

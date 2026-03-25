@@ -43,6 +43,8 @@ data/memories.duckdb*
 wikipedia_*.zim
 data/wiki/*.bz2
 data/prompt_caches
+data/web_headers.txt
+data/web_cookies.txt
 python/.env
 AGENTS.md
 .vscode/settings.json
